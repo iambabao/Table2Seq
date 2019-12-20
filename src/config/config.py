@@ -1,0 +1,68 @@
+import os
+
+
+class Config:
+    def __init__(self, root_dir, current_model, num_epoch=30, batch_size=32,
+                 sequence_len=800, hidden_size=600, top_k=5,
+                 word_em_size=500, attr_em_size=50, pos_em_size=10,
+                 fc_size_s=128, fc_size_m=512, fc_size_l=1024,
+                 optimizer='Adam', lr=1e-3, dropout=0.1,
+                 embedding_trainable=False):
+        self.root_dir = root_dir
+
+        self.temp_dir = os.path.join(self.root_dir, 'temp')
+
+        self.data_dir = os.path.join(self.root_dir, 'data')
+        self.train_data = os.path.join(self.data_dir, 'data_train.json')
+        self.valid_data = os.path.join(self.data_dir, 'data_valid.json')
+        self.test_data = os.path.join(self.data_dir, 'data_test.json')
+        self.word_dict = os.path.join(self.data_dir, 'dict_word.json')
+        self.attr_dict = os.path.join(self.data_dir, 'dict_attr.json')
+
+        self.embedding_dir = os.path.join(self.data_dir, 'embedding')
+        self.glove_file = os.path.join(self.embedding_dir, 'glove.6B.300d.txt')
+
+        self.current_model = current_model
+        self.result_dir = os.path.join(self.root_dir, 'result', self.current_model)
+        self.model_file = os.path.join(self.result_dir, 'model')
+        self.train_log_dir = os.path.join(self.result_dir, 'train_log')
+        self.valid_result = os.path.join(self.result_dir, 'valid_result.json')
+        self.test_result = os.path.join(self.result_dir, 'test_result.json')
+
+        self.pad = '<pad>'
+        self.pad_id = 0
+        self.unk = '<unk>'
+        self.unk_id = 1
+        self.sos = '<sos>'
+        self.sos_id = 2
+        self.eos = '<eos>'
+        self.eos_id = 3
+        self.num = '<num>'
+        self.num_id = 4
+        self.time = '<time>'
+        self.time_id = 5
+        self.word_size = 20000 + 6
+        self.attr_size = 1480 + 6
+        self.to_lower = True
+
+        self.top_k = top_k
+        self.word_em_size = word_em_size
+        self.attr_em_size = attr_em_size
+        self.pos_em_size = pos_em_size
+        self.sequence_len = sequence_len
+
+        # RNN
+        self.hidden_size = hidden_size
+
+        # FC
+        self.fc_size_s = fc_size_s
+        self.fc_size_m = fc_size_m
+        self.fc_size_l = fc_size_l
+
+        # Train
+        self.num_epoch = num_epoch
+        self.batch_size = batch_size
+        self.lr = lr
+        self.dropout = dropout
+        self.optimizer = optimizer
+        self.embedding_trainable = embedding_trainable

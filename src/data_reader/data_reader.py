@@ -36,18 +36,25 @@ class DataReader:
                     pos_fw += p
                     pos_bw += reversed(p)
                 desc = we.get_desc().split()
+
+                # check length and limit the maximum length of input
                 assert len(value) == len(attr)
                 assert len(value) == len(pos_fw)
                 assert len(value) == len(pos_bw)
                 if len(value) == 0:
                     continue
+                value = value[:self.config.sequence_len]
+                attr = attr[:self.config.sequence_len]
+                pos_fw = pos_fw[:self.config.sequence_len]
+                pos_fw = np.minimum(pos_fw, self.config.sequence_len - 1).tolist()
+                pos_bw = pos_bw[:self.config.sequence_len]
+                pos_bw = np.minimum(pos_bw, self.config.sequence_len - 1).tolist()
+                desc = desc[:self.config.sequence_len - 2]  # 2 for sos and eos
 
                 if self.config.to_lower:
                     value = list(map(str.lower, value))
                     attr = list(map(str.lower, attr))
                     desc = list(map(str.lower, desc))
-                pos_fw = np.minimum(pos_fw, self.config.sequence_len - 1).tolist()
-                pos_bw = np.minimum(pos_bw, self.config.sequence_len - 1).tolist()
                 desc = [self.config.sos] + desc + [self.config.eos]
 
                 value_seq.append(convert_list(value, self.word_2_id, self.config.pad_id, self.config.unk_id))

@@ -1,7 +1,9 @@
 from .seq2seq import Seq2Seq
+from .seq2seq_fa import Seq2SeqFA
 
 model_list = {
-    'seq2seq': Seq2Seq
+    'seq2seq': Seq2Seq,
+    'seq2seq_fa': Seq2SeqFA
 }
 
 

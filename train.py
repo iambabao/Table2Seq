@@ -18,7 +18,7 @@ parser.add_argument('--lr', type=float, default=1e-3)
 parser.add_argument('--em', action='store_true', default=False)
 args = parser.parse_args()
 
-config = Config('./', args.model, num_epoch=args.epoch, batch_size=args.batch,
+config = Config('.', args.model, num_epoch=args.epoch, batch_size=args.batch,
                 optimizer=args.optimizer, lr=args.lr,
                 embedding_trainable=args.em)
 

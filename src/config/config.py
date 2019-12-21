@@ -3,7 +3,7 @@ import os
 
 class Config:
     def __init__(self, root_dir, current_model, num_epoch=30, batch_size=32,
-                 sequence_len=800, hidden_size=600, top_k=5,
+                 sequence_len=150, hidden_size=600, top_k=5,
                  word_em_size=500, attr_em_size=50, pos_em_size=10,
                  fc_size_s=128, fc_size_m=512, fc_size_l=1024,
                  optimizer='Adam', lr=1e-3, dropout=0.1,

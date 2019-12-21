@@ -1,9 +1,10 @@
 import tensorflow as tf
 
+from .module.fa_wrapper import FAWrapper
 from .module.metrics import get_loss, get_accuracy
 
 
-class Seq2Seq:
+class Seq2SeqFA:
     def __init__(self, config, word_embedding_matrix):
         self.sos_id = config.sos_id
         self.eos_id = config.eos_id
@@ -66,8 +67,8 @@ class Seq2Seq:
         tf.summary.scalar('accuracy', self.accu)
         self.train_summary = tf.summary.merge_all()
 
-        self.greedy_pred_ids = self.greedy_inference()
-        self.beam_search_pred_ids = self.beam_search_inference()
+        self.greedy_pred_id = self.greedy_inference()
+        self.beam_search_pred_id = self.beam_search_inference()
 
     def get_train_op(self):
         # embedding
@@ -78,10 +79,15 @@ class Seq2Seq:
         enc_output, enc_state = self.encoding_layer(src_em, reuse=False)
 
         # decoding
-        logits = self.training_decoding_layer(enc_output, enc_state, tgt_em)
+        logits, attr_coverage, final_sequence_lengths = self.training_decoding_layer(enc_output, enc_state, tgt_em)
 
         loss = get_loss(self.desc_out, logits)
         accu = get_accuracy(self.desc_out, logits)
+
+        num_attr = tf.reduce_sum(tf.cast(tf.greater(attr_coverage, 0.0), dtype=tf.float32), axis=-1, keepdims=True)
+        attr_coverage_mean = attr_coverage / tf.expand_dims(tf.cast(final_sequence_lengths, dtype=tf.float32), axis=-1)
+        loss_fa = tf.reduce_mean(0.3 * tf.reduce_sum((attr_coverage_mean - tf.div_no_nan(1.0, num_attr))**2, axis=-1))
+        loss += loss_fa
 
         gradients = tf.gradients(loss, tf.trainable_variables())
         gradients, _ = tf.clip_by_global_norm(gradients, 5)
@@ -150,18 +156,13 @@ class Seq2Seq:
         return enc_output, enc_state
 
     def training_decoding_layer(self, enc_output, enc_state, tgt_em):
-        # add attention mechanism to decoder cell
-        with tf.variable_scope('attention_mechanism', reuse=False):
-            attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
-                self.hidden_size,
-                enc_output,
-                memory_sequence_length=self.src_len
-            )
-
-            decoder_cell = tf.contrib.seq2seq.AttentionWrapper(
+        # add force attention mechanism to decoder cell
+        with tf.variable_scope('force_attention_mechanism', reuse=False):
+            decoder_cell = FAWrapper(
                 self.decoder_cell,
-                attention_mechanism,
-                attention_layer_size=self.hidden_size
+                enc_output,
+                attr_size=self.attr_size,
+                attr_input_ids=self.attr_inp
             )
 
         dec_initial_state = decoder_cell.zero_state(batch_size=tf.shape(enc_output)[0], dtype=tf.float32)
@@ -172,25 +173,21 @@ class Seq2Seq:
         decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell, helper, dec_initial_state, self.final_dense)
 
         with tf.variable_scope('decoder', reuse=False):
-            final_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder)
+            final_outputs, final_state, final_sequence_lengths = tf.contrib.seq2seq.dynamic_decode(decoder)
 
         logits = final_outputs.rnn_output
+        attr_coverage = final_state.attr_coverage
 
-        return logits
+        return logits, attr_coverage, final_sequence_lengths
 
     def inference_decoding_layer(self, enc_output, enc_state, src_len, beam_search):
-        # add attention mechanism to decoder cell
-        with tf.variable_scope('attention_mechanism', reuse=True):
-            attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
-                self.hidden_size,
-                enc_output,
-                memory_sequence_length=src_len
-            )
-
-            decoder_cell = tf.contrib.seq2seq.AttentionWrapper(
+        # add force attention mechanism to decoder cell
+        with tf.variable_scope('force_attention_mechanism', reuse=True):
+            decoder_cell = FAWrapper(
                 self.decoder_cell,
-                attention_mechanism,
-                attention_layer_size=self.hidden_size
+                enc_output,
+                attr_size=self.attr_size,
+                attr_input_ids=self.attr_inp
             )
 
         dec_initial_state = decoder_cell.zero_state(batch_size=tf.shape(enc_output)[0], dtype=tf.float32)
@@ -220,7 +217,7 @@ class Seq2Seq:
 
         # decoding
         with tf.variable_scope('decoder', reuse=True):
-            final_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder, maximum_iterations=self.max_seq_len / 2)
+            final_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder, maximum_iterations=self.max_seq_len)
 
         if not beam_search:
             pred_ids = final_outputs.sample_id

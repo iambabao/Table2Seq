@@ -17,7 +17,7 @@ parser.add_argument('--bs', action='store_true', default=False)
 
 args = parser.parse_args()
 
-config = Config('./', args.model, batch_size=args.batch)
+config = Config('.', args.model, batch_size=args.batch)
 
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
@@ -54,7 +54,7 @@ def inference(sess, model, batch_iter, bs=False, verbose=True):
         pos_fw_seq = np.array(pad_batch(pos_fw_seq, config.pad_id))
         pos_bw_seq = np.array(pad_batch(pos_bw_seq, config.pad_id))
 
-        pred_id = sess.run(
+        pred_ids = sess.run(
             model.greedy_pred_id if not bs else model.beam_search_pred_id,
             feed_dict={
                 model.value_inp: value_seq,
@@ -65,8 +65,8 @@ def inference(sess, model, batch_iter, bs=False, verbose=True):
             }
         )
         if bs:
-            pred_id = pred_id[:, 0, :]
-        outputs.extend(refine_outputs(pred_id.tolist()))
+            pred_ids = pred_ids[:, 0, :]
+        outputs.extend(refine_outputs(pred_ids.tolist()))
 
         if verbose:
             print('\rprocessing batch: {:>6d}'.format(step + 1), end='')

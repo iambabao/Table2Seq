@@ -220,7 +220,7 @@ class Seq2Seq:
 
         # decoding
         with tf.variable_scope('decoder', reuse=True):
-            dec_output, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder, maximum_iterations=self.max_seq_len / 2)
+            dec_output, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder, maximum_iterations=int(self.max_seq_len / 2))
 
         if not beam_search:
             pred_id = dec_output.sample_id

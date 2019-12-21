@@ -29,7 +29,7 @@ def save_result(outputs, result_file, id_2_label):
     with open(result_file, 'w', encoding='utf-8') as fout:
         for line in outputs:
             res = {
-                'description': convert_list(line, id_2_label, config.pad, config.unk)
+                'description': ' '.join(convert_list(line, id_2_label, config.pad, config.unk))
             }
             print(json.dumps(res, ensure_ascii=False), file=fout)
 

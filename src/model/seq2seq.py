@@ -11,6 +11,7 @@ class Seq2Seq:
         self.attr_size = config.attr_size
         self.max_seq_len = config.sequence_len
         self.beam_size = config.top_k
+        self.beam_search = config.beam_search
 
         self.word_em_size = config.word_em_size
         self.attr_em_size = config.attr_em_size
@@ -66,8 +67,7 @@ class Seq2Seq:
         tf.summary.scalar('accuracy', self.accu)
         self.train_summary = tf.summary.merge_all()
 
-        self.greedy_pred_ids = self.greedy_inference()
-        self.beam_search_pred_ids = self.beam_search_inference()
+        self.predicted_dis = self.inference(self.beam_search)
 
     def get_train_op(self):
         # embedding
@@ -89,8 +89,7 @@ class Seq2Seq:
 
         return gradients, train_op, loss, accu
 
-    # greedy decoding
-    def greedy_inference(self):
+    def inference(self, beam_search):
         # embedding
         src_em = self.src_embedding_layer(training=False)
 
@@ -98,27 +97,18 @@ class Seq2Seq:
         enc_output, enc_state = self.encoding_layer(src_em, reuse=True)
 
         # decoding
-        pred_ids = self.inference_decoding_layer(enc_output, enc_state, self.src_len, beam_search=False)
+        if not beam_search:
+            predicted_ids = self.inference_decoding_layer(enc_output, enc_state, self.src_len, beam_search=beam_search)
+        else:
+            # tiled to beam size
+            tiled_enc_output = tf.contrib.seq2seq.tile_batch(enc_output, multiplier=self.beam_size)
+            tiled_enc_state = tf.contrib.seq2seq.tile_batch(enc_state, multiplier=self.beam_size)
+            tiled_src_len = tf.contrib.seq2seq.tile_batch(self.src_len, multiplier=self.beam_size)
 
-        return pred_ids
+            predicted_ids = self.inference_decoding_layer(tiled_enc_output, tiled_enc_state, tiled_src_len,
+                                                          beam_search=beam_search)
 
-    # beam search decoding
-    def beam_search_inference(self):
-        # embedding
-        src_em = self.src_embedding_layer(training=False)
-
-        # encoding
-        enc_output, enc_state = self.encoding_layer(src_em, reuse=True)
-
-        # tiled to beam size
-        tiled_enc_output = tf.contrib.seq2seq.tile_batch(enc_output, multiplier=self.beam_size)
-        tiled_enc_state = tf.contrib.seq2seq.tile_batch(enc_state, multiplier=self.beam_size)
-        tiled_src_len = tf.contrib.seq2seq.tile_batch(self.src_len, multiplier=self.beam_size)
-
-        # decoding
-        pred_ids = self.inference_decoding_layer(tiled_enc_output, tiled_enc_state, tiled_src_len, beam_search=False)
-
-        return pred_ids
+        return predicted_ids
 
     def src_embedding_layer(self, training):
         with tf.device('/cpu:0'):
@@ -220,12 +210,13 @@ class Seq2Seq:
 
         # decoding
         with tf.variable_scope('decoder', reuse=True):
-            final_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder, maximum_iterations=self.max_seq_len / 2)
+            final_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder, maximum_iterations=self.max_seq_len)
 
         if not beam_search:
-            pred_ids = final_outputs.sample_id
+            predicted_ids = final_outputs.sample_id
         else:
-            pred_ids = final_outputs.predicted_ids  # (batch_size, seq_len, beam_size)
-            pred_ids = tf.transpose(pred_ids, perm=[0, 2, 1])  # (batch_size, beam_size, seq_len)
+            predicted_ids = final_outputs.predicted_ids  # (batch_size, seq_len, beam_size)
+            predicted_ids = tf.transpose(predicted_ids, perm=[0, 2, 1])  # (batch_size, beam_size, seq_len)
+            predicted_ids = predicted_ids[:, 0, :]  # keep top one
 
-        return pred_ids
+        return predicted_ids

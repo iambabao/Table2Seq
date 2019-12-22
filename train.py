@@ -88,7 +88,7 @@ def train():
 
     if os.path.exists(config.glove_file):
         print('loading embedding matrix from file: {}'.format(config.glove_file))
-        embedding_matrix, config.embedding_size = load_glove_embedding(config.glove_file, list(word_2_id.keys()))
+        embedding_matrix, config.word_em_size = load_glove_embedding(config.glove_file, list(word_2_id.keys()))
         print('shape of embedding matrix: {}'.format(embedding_matrix.shape))
     else:
         embedding_matrix = None

@@ -13,11 +13,11 @@ from src.utils import read_dict, make_batch_iter, pad_batch, convert_list
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', '-m', type=str, required=True)
 parser.add_argument('--batch', type=int, default=32)
-parser.add_argument('--bs', action='store_true', default=False)
+parser.add_argument('--beam_search', action='store_true', default=False)
 
 args = parser.parse_args()
 
-config = Config('.', args.model, batch_size=args.batch)
+config = Config('.', args.model, batch_size=args.batch, beam_search=args.beam_search)
 
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
@@ -43,7 +43,7 @@ def refine_outputs(outputs):
     return ret
 
 
-def inference(sess, model, batch_iter, bs=False, verbose=True):
+def inference(sess, model, batch_iter, verbose=True):
     outputs = []
     for step, batch in enumerate(batch_iter):
         value_seq, attr_seq, pos_fw_seq, pos_bw_seq, _ = list(zip(*batch))
@@ -54,8 +54,8 @@ def inference(sess, model, batch_iter, bs=False, verbose=True):
         pos_fw_seq = np.array(pad_batch(pos_fw_seq, config.pad_id))
         pos_bw_seq = np.array(pad_batch(pos_bw_seq, config.pad_id))
 
-        pred_ids = sess.run(
-            model.greedy_pred_id if not bs else model.beam_search_pred_id,
+        predicted_dis = sess.run(
+            model.predicted_dis,
             feed_dict={
                 model.value_inp: value_seq,
                 model.attr_inp: attr_seq,
@@ -64,9 +64,7 @@ def inference(sess, model, batch_iter, bs=False, verbose=True):
                 model.src_len: src_len_seq
             }
         )
-        if bs:
-            pred_ids = pred_ids[:, 0, :]
-        outputs.extend(refine_outputs(pred_ids.tolist()))
+        outputs.extend(refine_outputs(predicted_dis.tolist()))
 
         if verbose:
             print('\rprocessing batch: {:>6d}'.format(step + 1), end='')
@@ -87,7 +85,7 @@ def test():
     if os.path.exists(config.glove_file):
         with open(config.glove_file, 'r', encoding='utf-8') as fin:
             line = fin.readline()
-            config.embedding_size = len(line.strip().split()) - 1
+            config.word_em_size = len(line.strip().split()) - 1
 
     data_reader = DataReader(config, word_2_id, attr_2_id)
     test_data = data_reader.read_test_data()
@@ -103,7 +101,7 @@ def test():
             print('loading model from {}'.format(tf.train.latest_checkpoint(config.result_dir)))
 
             test_batch_iter = make_batch_iter(list(zip(*test_data)), config.batch_size, shuffle=False)
-            outputs = inference(sess, model, test_batch_iter, bs=args.bs, verbose=True)
+            outputs = inference(sess, model, test_batch_iter, verbose=True)
 
             print('==========  Saving Result  ==========')
             save_result(outputs, config.test_result, id_2_word)

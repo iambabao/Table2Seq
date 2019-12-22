@@ -7,7 +7,7 @@ class Config:
                  word_em_size=500, attr_em_size=50, pos_em_size=10,
                  fc_size_s=128, fc_size_m=512, fc_size_l=1024,
                  optimizer='Adam', lr=1e-3, dropout=0.1,
-                 embedding_trainable=False):
+                 embedding_trainable=False, beam_search=False):
         self.root_dir = root_dir
 
         self.temp_dir = os.path.join(self.root_dir, 'temp')
@@ -50,6 +50,7 @@ class Config:
         self.attr_em_size = attr_em_size
         self.pos_em_size = pos_em_size
         self.sequence_len = sequence_len
+        self.beam_search = beam_search
 
         # RNN
         self.hidden_size = hidden_size

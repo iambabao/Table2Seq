@@ -30,6 +30,7 @@ class Seq2SeqFA:
         self.desc_out = tf.placeholder(tf.int32, [None, None], name='desc_out')
         self.src_len = tf.placeholder(tf.int32, [None], name='src_len')
         self.tgt_len = tf.placeholder(tf.int32, [None], name='tgt_len')
+        self.training = tf.placeholder(tf.bool, [], name='training')
 
         self.global_step = tf.Variable(0, trainable=False, name='global_step')
 
@@ -61,58 +62,47 @@ class Seq2SeqFA:
         else:
             assert False
 
-        self.gradients, self.train_op, self.loss, self.accu = self.get_train_op()
+        logits, coverage_loss, self.predicted_ids = self.forward()
+        self.loss = get_loss(self.desc_out, logits)
+        # self.loss += coverage_loss  # add coverage loss after 4 epochs according to the paper
+        self.accu = get_accuracy(self.desc_out, logits)
+        self.gradients, self.train_op = self.get_train_op()
 
         tf.summary.scalar('learning_rate', self.lr() if callable(self.lr) else self.lr)
+        tf.summary.scalar('coverage_loss', coverage_loss)
         tf.summary.scalar('loss', self.loss)
         tf.summary.scalar('accuracy', self.accu)
-        self.train_summary = tf.summary.merge_all()
+        self.summary = tf.summary.merge_all()
 
-        self.predicted_dis = self.inference(self.beam_search)
-
-    def get_train_op(self):
+    def forward(self):
         # embedding
-        src_em = self.src_embedding_layer(training=True)
-        tgt_em = self.tgt_embedding_layer(training=True)
+        src_em = self.src_embedding_layer(training=self.training)
+        tgt_em = self.tgt_embedding_layer(training=self.training)
 
         # encoding
-        enc_output, enc_state = self.encoding_layer(src_em, reuse=False)
+        enc_output, enc_state = self.encoding_layer(src_em)
 
-        # decoding
-        logits, attr_coverage, final_sequence_lengths = self.training_decoding_layer(enc_output, enc_state, tgt_em)
+        # decoding in training
+        logits, coverage_loss = self.training_decoding_layer(enc_output, enc_state, tgt_em)
 
-        loss = get_loss(self.desc_out, logits)
-        accu = get_accuracy(self.desc_out, logits)
-
-        num_attr = tf.reduce_sum(tf.cast(tf.greater(attr_coverage, 0.0), dtype=tf.float32), axis=-1, keepdims=True)
-        attr_coverage_mean = attr_coverage / tf.expand_dims(tf.cast(final_sequence_lengths, dtype=tf.float32), axis=-1)
-        loss_fa = tf.reduce_mean(0.3 * tf.reduce_sum((attr_coverage_mean - tf.div_no_nan(1.0, num_attr))**2, axis=-1))
-        loss += loss_fa
-
-        gradients = tf.gradients(loss, tf.trainable_variables())
-        gradients, _ = tf.clip_by_global_norm(gradients, 5)
-        train_op = self.optimizer.apply_gradients(zip(gradients, tf.trainable_variables()), self.global_step)
-
-        return gradients, train_op, loss, accu
-
-    def inference(self, beam_search):
-        # embedding
-        src_em = self.src_embedding_layer(training=False)
-
-        # encoding
-        enc_output, enc_state = self.encoding_layer(src_em, reuse=True)
-
-        # decoding
-        if not beam_search:
-            predicted_ids = self.inference_decoding_layer(enc_output, enc_state, beam_search=beam_search)
+        # decoding in testing
+        if not self.beam_search:
+            predicted_ids = self.inference_decoding_layer(enc_output, enc_state, beam_search=self.beam_search)
         else:
             # tiled to beam size
             tiled_enc_output = tf.contrib.seq2seq.tile_batch(enc_output, multiplier=self.beam_size)
             tiled_enc_state = tf.contrib.seq2seq.tile_batch(enc_state, multiplier=self.beam_size)
+            predicted_ids = self.inference_decoding_layer(tiled_enc_output, tiled_enc_state,
+                                                          beam_search=self.beam_search)
 
-            predicted_ids = self.inference_decoding_layer(tiled_enc_output, tiled_enc_state, beam_search=beam_search)
+        return logits, coverage_loss, predicted_ids
 
-        return predicted_ids
+    def get_train_op(self):
+        gradients = tf.gradients(self.loss, tf.trainable_variables())
+        gradients, _ = tf.clip_by_global_norm(gradients, 5)
+        train_op = self.optimizer.apply_gradients(zip(gradients, tf.trainable_variables()), self.global_step)
+
+        return gradients, train_op
 
     def src_embedding_layer(self, training):
         with tf.device('/cpu:0'):
@@ -132,8 +122,8 @@ class Seq2SeqFA:
 
         return tgt_em
 
-    def encoding_layer(self, src_em, reuse):
-        with tf.variable_scope('encoder', reuse=reuse):
+    def encoding_layer(self, src_em):
+        with tf.variable_scope('encoder'):
             enc_output, enc_state = tf.nn.dynamic_rnn(
                 self.encoder_cell,
                 src_em,
@@ -150,7 +140,8 @@ class Seq2SeqFA:
                 self.decoder_cell,
                 enc_output,
                 attr_size=self.attr_size,
-                attr_input_ids=self.attr_inp
+                attr_input_ids=self.attr_inp,
+                memory_sequence_length=self.src_len
             )
 
         dec_initial_state = decoder_cell.zero_state(batch_size=tf.shape(enc_output)[0], dtype=tf.float32)
@@ -164,9 +155,13 @@ class Seq2SeqFA:
             final_outputs, final_state, final_sequence_lengths = tf.contrib.seq2seq.dynamic_decode(decoder)
 
         logits = final_outputs.rnn_output
-        attr_coverage = final_state.attr_coverage
 
-        return logits, attr_coverage, final_sequence_lengths
+        attr_coverage = final_state.attr_coverage
+        num_attr = tf.reduce_sum(tf.cast(tf.greater(attr_coverage, 0.0), dtype=tf.float32), axis=-1, keepdims=True)
+        attr_coverage_mean = attr_coverage / tf.expand_dims(tf.cast(final_sequence_lengths, dtype=tf.float32), axis=-1)
+        coverage_loss = tf.reduce_mean(0.3 * tf.reduce_sum((attr_coverage_mean - tf.div_no_nan(1.0, num_attr))**2, axis=-1))
+
+        return logits, coverage_loss
 
     def inference_decoding_layer(self, enc_output, enc_state, beam_search):
         # add force attention mechanism to decoder cell
@@ -175,7 +170,8 @@ class Seq2SeqFA:
                 self.decoder_cell,
                 enc_output,
                 attr_size=self.attr_size,
-                attr_input_ids=self.attr_inp
+                attr_input_ids=self.attr_inp,
+                memory_sequence_length=self.src_len
             )
 
         dec_initial_state = decoder_cell.zero_state(batch_size=tf.shape(enc_output)[0], dtype=tf.float32)

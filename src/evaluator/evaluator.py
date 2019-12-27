@@ -1,6 +1,9 @@
 import json
-from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
 
+from .pycocoevalcap.bleu.bleu import Bleu
+from .pycocoevalcap.meteor.meteor import Meteor
+from .pycocoevalcap.rouge.rouge import Rouge
+from .pycocoevalcap.cider.cider import Cider
 from src.wikientity import WikiEntity
 
 
@@ -8,35 +11,45 @@ class Evaluator:
     def __init__(self, key):
         self.key = key
 
-    def get_bleu_score(self, truth_file, pred_file, to_lower):
-        f_truth = open(truth_file, 'r', encoding='utf-8')
-        f_pred = open(pred_file, 'r', encoding='utf-8')
+    def evaluate(self, ref_file, hyp_file, to_lower):
+        refs = []
+        with open(ref_file, 'r', encoding='utf-8') as fin:
+            for line in fin:
+                ref = WikiEntity(line)
+                if len(ref.get_box()) == 0:
+                    continue
+                ref = ref.get_desc()
+                if to_lower:
+                    ref = ref.lower()
+                refs.append(ref)
+        refs = {idx: [ref] for idx, ref in enumerate(refs)}
 
-        list_of_references = []
-        hypotheses = []
-        for truth in f_truth:
+        hyps = []
+        with open(hyp_file, 'r', encoding='utf-8') as fin:
+            for line in fin:
+                hyp = json.loads(line)[self.key]
+                if to_lower:
+                    hyp = hyp.lower()
+                hyps.append(hyp)
+        hyps = {idx: [hyp] for idx, hyp in enumerate(hyps)}
 
-            truth = WikiEntity(truth)
-            if len(truth.get_box()) == 0:
-                continue
-            truth = truth.get_desc()
-            if to_lower:
-                truth = truth.lower()
-            truth = truth.split()
+        assert len(refs) == len(hyps)
 
-            pred = f_pred.readline()
-            pred = json.loads(pred)
-            pred = pred[self.key]
-            if to_lower:
-                pred = pred.lower()
-            pred = pred.split()
+        res = {}
+        scorers = [
+            (Bleu(4), ["Bleu_1", "Bleu_2", "Bleu_3", "Bleu_4"]),
+            (Meteor(), "METEOR"),
+            (Rouge(), "ROUGE_L"),
+            (Cider(), "CIDEr")
+        ]
+        for scorer, method in scorers:
+            score, scores = scorer.compute_score(refs, hyps)
+            if isinstance(method, list):
+                for sc, scs, m in zip(score, scores, method):
+                    print("%s: %0.6f" % (m, sc))
+                    res[m] = sc
+            else:
+                print("%s: %0.6f" % (method, score))
+                res[method] = score
 
-            list_of_references.append([truth])
-            hypotheses.append(pred)
-
-        bleu1 = 100 * corpus_bleu(list_of_references, hypotheses, (1., 0., 0., 0.), SmoothingFunction().method4)
-        bleu2 = 100 * corpus_bleu(list_of_references, hypotheses, (0.5, 0.5, 0., 0.), SmoothingFunction().method4)
-        bleu3 = 100 * corpus_bleu(list_of_references, hypotheses, (0.33, 0.33, 0.33, 0.), SmoothingFunction().method4)
-        bleu4 = 100 * corpus_bleu(list_of_references, hypotheses, (0.25, 0.25, 0.25, 0.25), SmoothingFunction().method4)
-        print('{:>.4f}, {:>.4f}, {:>.4f}, {:>.4f}'.format(bleu1, bleu2, bleu3, bleu4))
-        return (bleu1 + bleu2 + bleu3 + bleu4) / 4
+        return res

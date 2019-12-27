@@ -28,6 +28,7 @@ class FAWrapper(tf.nn.rnn_cell.RNNCell):
                  encoder_outputs,
                  attr_size,
                  attr_input_ids,
+                 memory_sequence_length=None,
                  encoder_state_size=None,
                  initial_cell_state=None,
                  name=None):
@@ -38,15 +39,15 @@ class FAWrapper(tf.nn.rnn_cell.RNNCell):
         self._attr_size = attr_size
         self._attr_input_ids = attr_input_ids
         self._seq_len = tf.shape(attr_input_ids)[-1]
+        self._memory_sequence_length = memory_sequence_length
         if encoder_state_size is None:
             encoder_state_size = self._encoder_outputs.shape[-1].value
             if encoder_state_size is None:
                 raise ValueError('encoder_state_size must be set.')
-        self._encoder_state_size = encoder_state_size
         self._initial_cell_state = initial_cell_state
 
-        self._weights_p = tf.get_variable('weights_p', [self._encoder_state_size, 1])
-        self._weights_q = tf.get_variable('weights_q', [self._encoder_state_size, 1])
+        self._weights_p = tf.get_variable('weights_p', [encoder_state_size, 1])
+        self._weights_q = tf.get_variable('weights_q', [encoder_state_size, 1])
         self._pi = tf.get_variable(
             initializer=tf.keras.initializers.random_uniform(0, 1, dtype=tf.float32),
             shape=[],
@@ -63,9 +64,7 @@ class FAWrapper(tf.nn.rnn_cell.RNNCell):
         prev_word_coverage = state.word_coverage
         prev_attr_coverage = state.attr_coverage
 
-        w1 = tf.reshape(tf.matmul(self._encoder_outputs, self._weights_p), [-1, self._seq_len])
-        w2 = tf.reshape(tf.matmul(prev_cell_state.h, self._weights_q), [-1, 1])
-        word_attention = tf.math.softmax(tf.math.tanh(w1 + w2), axis=-1)  # [batch_size, seq_len]
+        word_attention = self._get_word_attention(self._encoder_outputs, prev_cell_state.h)  # [batch_size, seq_len]
         attr_attention = self._get_attr_attention(word_attention)  # [batch_size, attr_size]
 
         word_coverage = prev_word_coverage + word_attention
@@ -85,6 +84,20 @@ class FAWrapper(tf.nn.rnn_cell.RNNCell):
         state = FAWrapperState(cell_state=cell_state, time=time,
                                word_coverage=word_coverage, attr_coverage=attr_coverage)
         return outputs, state
+
+    def _get_word_attention(self, memory, query):
+        w1 = tf.reshape(tf.matmul(memory, self._weights_p), [-1, self._seq_len])
+        w2 = tf.reshape(tf.matmul(query, self._weights_q), [-1, 1])
+        word_attention = tf.math.tanh(w1 + w2)  # [batch_size, seq_len]
+
+        if self._memory_sequence_length is not None:
+            mask = tf.sequence_mask(self._memory_sequence_length, maxlen=self._seq_len)
+            mask = tf.cast(tf.logical_not(mask), dtype=tf.float32)
+            word_attention += -1e9 * mask
+
+        word_attention = tf.math.softmax(word_attention, axis=-1)
+
+        return word_attention
 
     def _get_attr_attention(self, word_attention):
         attr_input_em = tf.one_hot(self._attr_input_ids, self._attr_size)

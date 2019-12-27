@@ -26,6 +26,7 @@ class Config:
         self.result_dir = os.path.join(self.root_dir, 'result', self.current_model)
         self.model_file = os.path.join(self.result_dir, 'model')
         self.train_log_dir = os.path.join(self.result_dir, 'train_log')
+        self.valid_log_dir = os.path.join(self.result_dir, 'valid_log')
         self.valid_result = os.path.join(self.result_dir, 'valid_result.json')
         self.test_result = os.path.join(self.result_dir, 'test_result.json')
 

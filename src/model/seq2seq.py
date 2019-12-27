@@ -29,6 +29,7 @@ class Seq2Seq:
         self.desc_out = tf.placeholder(tf.int32, [None, None], name='desc_out')
         self.src_len = tf.placeholder(tf.int32, [None], name='src_len')
         self.tgt_len = tf.placeholder(tf.int32, [None], name='tgt_len')
+        self.training = tf.placeholder(tf.bool, [], name='training')
 
         self.global_step = tf.Variable(0, trainable=False, name='global_step')
 
@@ -60,55 +61,46 @@ class Seq2Seq:
         else:
             assert False
 
-        self.gradients, self.train_op, self.loss, self.accu = self.get_train_op()
+        logits, self.predicted_ids = self.forward()
+        self.loss = get_loss(self.desc_out, logits)
+        self.accu = get_accuracy(self.desc_out, logits)
+        self.gradients, self.train_op = self.get_train_op()
 
         tf.summary.scalar('learning_rate', self.lr() if callable(self.lr) else self.lr)
         tf.summary.scalar('loss', self.loss)
         tf.summary.scalar('accuracy', self.accu)
-        self.train_summary = tf.summary.merge_all()
+        self.summary = tf.summary.merge_all()
 
-        self.predicted_dis = self.inference(self.beam_search)
-
-    def get_train_op(self):
+    def forward(self):
         # embedding
-        src_em = self.src_embedding_layer(training=True)
-        tgt_em = self.tgt_embedding_layer(training=True)
+        src_em = self.src_embedding_layer(training=self.training)
+        tgt_em = self.tgt_embedding_layer(training=self.training)
 
         # encoding
-        enc_output, enc_state = self.encoding_layer(src_em, reuse=False)
+        enc_output, enc_state = self.encoding_layer(src_em)
 
-        # decoding
+        # decoding in training
         logits = self.training_decoding_layer(enc_output, enc_state, tgt_em)
 
-        loss = get_loss(self.desc_out, logits)
-        accu = get_accuracy(self.desc_out, logits)
-
-        gradients = tf.gradients(loss, tf.trainable_variables())
-        gradients, _ = tf.clip_by_global_norm(gradients, 5)
-        train_op = self.optimizer.apply_gradients(zip(gradients, tf.trainable_variables()), self.global_step)
-
-        return gradients, train_op, loss, accu
-
-    def inference(self, beam_search):
-        # embedding
-        src_em = self.src_embedding_layer(training=False)
-
-        # encoding
-        enc_output, enc_state = self.encoding_layer(src_em, reuse=True)
-
-        # decoding
-        if not beam_search:
-            predicted_ids = self.inference_decoding_layer(enc_output, enc_state, self.src_len, beam_search=beam_search)
+        # decoding in testing
+        if not self.beam_search:
+            predicted_ids = self.inference_decoding_layer(enc_output, enc_state, self.src_len, beam_search=self.beam_search)
         else:
             # tiled to beam size
             tiled_enc_output = tf.contrib.seq2seq.tile_batch(enc_output, multiplier=self.beam_size)
             tiled_enc_state = tf.contrib.seq2seq.tile_batch(enc_state, multiplier=self.beam_size)
             tiled_src_len = tf.contrib.seq2seq.tile_batch(self.src_len, multiplier=self.beam_size)
-
             predicted_ids = self.inference_decoding_layer(tiled_enc_output, tiled_enc_state, tiled_src_len,
-                                                          beam_search=beam_search)
+                                                          beam_search=self.beam_search)
 
-        return predicted_ids
+        return logits, predicted_ids
+
+    def get_train_op(self):
+        gradients = tf.gradients(self.loss, tf.trainable_variables())
+        gradients, _ = tf.clip_by_global_norm(gradients, 5)
+        train_op = self.optimizer.apply_gradients(zip(gradients, tf.trainable_variables()), self.global_step)
+
+        return gradients, train_op
 
     def src_embedding_layer(self, training):
         with tf.device('/cpu:0'):
@@ -128,8 +120,8 @@ class Seq2Seq:
 
         return tgt_em
 
-    def encoding_layer(self, src_em, reuse):
-        with tf.variable_scope('encoder', reuse=reuse):
+    def encoding_layer(self, src_em):
+        with tf.variable_scope('encoder'):
             enc_output, enc_state = tf.nn.dynamic_rnn(
                 self.encoder_cell,
                 src_em,

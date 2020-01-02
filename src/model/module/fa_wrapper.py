@@ -77,7 +77,8 @@ class FAWrapper(tf.nn.rnn_cell.RNNCell):
         zeta = tf.minimum(word_coverage_mean, expanded_attr_coverage_mean)
         zeta = tf.reduce_max(zeta, axis=-1, keepdims=True) - zeta  # [batch_size, seq_len]
 
-        v = tf.einsum('ijk,ij->ik', self._encoder_outputs, zeta)
+        # v = tf.einsum('ijk,ij->ik', self._encoder_outputs, zeta)  # version 1
+        v = tf.reduce_sum(self._encoder_outputs * tf.expand_dims(zeta, axis=-1), axis=1)  # version 2: memory efficiency
         c = self._pi * prev_cell_state.c + (1 - self._pi) * v  # [batch_size, hidden_size]
 
         outputs, cell_state = self._cell(inputs, tf.nn.rnn_cell.LSTMStateTuple(c=c, h=prev_cell_state.h), scope)

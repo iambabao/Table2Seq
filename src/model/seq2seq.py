@@ -97,7 +97,7 @@ class Seq2Seq:
 
     def get_train_op(self):
         gradients = tf.gradients(self.loss, tf.trainable_variables())
-        gradients, _ = tf.clip_by_global_norm(gradients, 5)
+        # gradients, _ = tf.clip_by_global_norm(gradients, 5)
         train_op = self.optimizer.apply_gradients(zip(gradients, tf.trainable_variables()), self.global_step)
 
         return gradients, train_op

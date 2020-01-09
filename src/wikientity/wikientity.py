@@ -19,3 +19,9 @@ class WikiEntity:
 
     def get_box(self):
         return self.box
+
+    def get_properties(self):
+        return list(self.box.keys())
+
+    def get_value(self, p):
+        return self.box.get(p)

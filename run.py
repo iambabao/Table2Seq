@@ -24,6 +24,7 @@ parser.add_argument('--em', action='store_true', default=False)
 parser.add_argument('--model_file', type=str)
 parser.add_argument('--log_steps', type=int, default=10)
 parser.add_argument('--save_steps', type=int, default=100)
+parser.add_argument('--pre_train_epochs', type=int, default=4)
 parser.add_argument('--early_stop', action='store_true', default=False)
 parser.add_argument('--beam_search', action='store_true', default=False)
 args = parser.parse_args()
@@ -92,7 +93,7 @@ def run_evaluate(sess, model, valid_data, summary_writer=None, verbose=True):
     steps = 0
     total_loss = 0.0
     total_accu = 0.0
-    batch_iter = make_batch_iter(list(zip(*valid_data))[:2048], config.batch_size, shuffle=True, verbose=verbose)
+    batch_iter = make_batch_iter(list(zip(*valid_data)), config.batch_size, shuffle=True, verbose=verbose)
     for batch in batch_iter:
         value_seq, attr_seq, pos_fw_seq, pos_bw_seq, desc_seq = list(zip(*batch))
         src_len_seq = np.array([len(src) for src in value_seq])
@@ -140,7 +141,7 @@ def run_train(sess, model, train_data, valid_data, saver,
         steps = 0
         total_loss = 0.0
         total_accu = 0.0
-        batch_iter = make_batch_iter(list(zip(*train_data))[:2048], config.batch_size, shuffle=True, verbose=verbose)
+        batch_iter = make_batch_iter(list(zip(*train_data)), config.batch_size, shuffle=True, verbose=verbose)
         for batch in batch_iter:
             start_time = time.time()
             value_seq, attr_seq, pos_fw_seq, pos_bw_seq, desc_seq = list(zip(*batch))
@@ -177,23 +178,25 @@ def run_train(sess, model, train_data, valid_data, saver,
             if steps % args.log_steps == 0 and train_summary_writer is not None:
                 train_summary_writer.add_summary(summary, global_step)
             if global_step % args.save_steps == 0:
-                valid_loss, valid_accu = run_evaluate(sess, model, valid_data, valid_summary_writer, verbose=False)
-                print_title('Valid Result', sep='*')
-                print('average valid loss: {:>.4f}, average valid accuracy: {:>.4f}'.format(valid_loss, valid_accu))
-
-                # early stop training when the loss on validation set do not decrease for more than 5 epochs
-                if valid_loss < loss_log:
-                    flag = 0
-                    loss_log = valid_loss
-                elif flag > 5 and args.early_stop:
-                    break
-                else:
-                    flag += 1
                 saver.save(sess, config.model_file, global_step=global_step)
+                if i + 1 > args.pre_train_epochs:
+                    valid_loss, valid_accu = run_evaluate(sess, model, valid_data, valid_summary_writer, verbose=False)
+                    print_title('Valid Result', sep='*')
+                    print('average valid loss: {:>.4f}, average valid accuracy: {:>.4f}'.format(valid_loss, valid_accu))
+
+                    # early stop training when the loss on validation set do not decrease for more than 5 epochs
+                    if valid_loss < loss_log:
+                        flag = 0
+                        loss_log = valid_loss
+                    elif flag < 5:
+                        flag += 1
+                    elif args.early_stop:
+                        return
         print()
         print_title('Train Result', sep='*')
         print('average train loss: {:>.4f}, average train accuracy: {:>.4f}'.format(
             total_loss / steps, total_accu / steps))
+    saver.save(sess, config.model_file, global_step=global_step)
 
 
 def main():

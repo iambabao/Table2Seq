@@ -84,8 +84,7 @@ class FAWrapper(tf.nn.rnn_cell.RNNCell):
         v = tf.reduce_sum(self._encoder_outputs * tf.expand_dims(zeta, axis=-1), axis=1)
         c_tilde = self._pi * c + (1 - self._pi) * v  # [batch_size, hidden_size]
 
-        sc = tf.concat([cell_state.h, c], axis=-1)
-        # sc = tf.concat([cell_state.h, c_tilde], axis=-1)
+        sc = tf.concat([cell_state.h, c_tilde], axis=-1)
         outputs = tf.expand_dims(self._weights_s, axis=0) * tf.math.tanh(tf.matmul(sc, self._weights_t))  # logits
         state = FAWrapperState(cell_state=cell_state, time=prev_time + 1,
                                word_coverage=word_coverage, attr_coverage=attr_coverage)

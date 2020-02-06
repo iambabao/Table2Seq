@@ -89,7 +89,7 @@ def run_test(sess, model, test_data, verbose=True):
     return outputs
 
 
-def run_evaluate(sess, model, valid_data, summary_writer=None, verbose=True):
+def run_evaluate(sess, model, valid_data, valid_summary_writer=None, verbose=True):
     steps = 0
     total_loss = 0.0
     total_accu = 0.0
@@ -125,8 +125,8 @@ def run_evaluate(sess, model, valid_data, summary_writer=None, verbose=True):
         total_accu += accu
         if verbose:
             print('\rprocessing batch: {:>6d}'.format(steps + 1), end='')
-        if steps % args.log_steps == 0 and summary_writer is not None:
-            summary_writer.add_summary(summary, global_step)
+        if steps % args.log_steps == 0 and valid_summary_writer is not None:
+            valid_summary_writer.add_summary(summary, global_step)
     print()
 
     return total_loss / steps, total_accu / steps
@@ -136,6 +136,7 @@ def run_train(sess, model, train_data, valid_data, saver,
               train_summary_writer=None, valid_summary_writer=None, verbose=True):
     flag = 0
     loss_log = 1e9
+    global_step = 0
     for i in range(config.num_epoch):
         print_title('Train Epoch: {}'.format(i + 1))
         steps = 0
@@ -179,6 +180,7 @@ def run_train(sess, model, train_data, valid_data, saver,
                 train_summary_writer.add_summary(summary, global_step)
             if global_step % args.save_steps == 0:
                 saver.save(sess, config.model_file, global_step=global_step)
+                # evaluate saved models after pre-train epochs
                 if i + 1 > args.pre_train_epochs:
                     valid_loss, valid_accu = run_evaluate(sess, model, valid_data, valid_summary_writer, verbose=False)
                     print_title('Valid Result', sep='*')
@@ -193,7 +195,7 @@ def run_train(sess, model, train_data, valid_data, saver,
                     elif args.early_stop:
                         return
         print()
-        print_title('Train Result', sep='*')
+        print_title('Train Result')
         print('average train loss: {:>.4f}, average train accuracy: {:>.4f}'.format(
             total_loss / steps, total_accu / steps))
     saver.save(sess, config.model_file, global_step=global_step)
@@ -250,10 +252,10 @@ def main():
             if model_file is None:
                 model_file = tf.train.latest_checkpoint(config.result_dir)
             if model_file is not None:
-                print('loading model from {}'.format(model_file))
+                print('loading model from {}...'.format(model_file))
                 saver.restore(sess, model_file)
             else:
-                print('initializing from scratch.')
+                print('initializing from scratch...')
                 tf.global_variables_initializer().run()
 
             train_writer = tf.summary.FileWriter(config.train_log_dir, sess.graph)
@@ -270,13 +272,13 @@ def main():
             if model_file is None:
                 model_file = tf.train.latest_checkpoint(config.result_dir)
             if model_file is not None:
-                print('loading model from {}'.format(model_file))
+                print('loading model from {}...'.format(model_file))
                 saver.restore(sess, model_file)
 
-                valid_loss, valid_accu = run_evaluate(sess, model, valid_data, summary_writer=None, verbose=True)
+                valid_loss, valid_accu = run_evaluate(sess, model, valid_data, valid_summary_writer=None, verbose=True)
                 print('average valid loss: {:>.4f}, average valid accuracy: {:>.4f}'.format(valid_loss, valid_accu))
             else:
-                print('model not found')
+                print('model not found!')
 
     if args.do_test:
         print('loading data...')
@@ -287,7 +289,7 @@ def main():
             if model_file is None:
                 model_file = tf.train.latest_checkpoint(config.result_dir)
             if model_file is not None:
-                print('loading model from {}'.format(model_file))
+                print('loading model from {}...'.format(model_file))
                 saver.restore(sess, model_file)
 
                 outputs = run_test(sess, model, test_data, verbose=True)
@@ -296,7 +298,7 @@ def main():
                 save_result(outputs, config.test_result, id_2_word)
                 evaluator.evaluate(config.test_data, config.test_result, config.to_lower)
             else:
-                print('model not found')
+                print('model not found!')
 
 
 if __name__ == '__main__':

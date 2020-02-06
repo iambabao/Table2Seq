@@ -42,8 +42,9 @@ class Config:
         self.num_id = 4
         self.time = '<time>'
         self.time_id = 5
-        self.word_size = 20000 + 6
+        self.vocab_size = 20000 + 6
         self.attr_size = 1480 + 6
+        self.pos_size = 10
         self.to_lower = True
 
         self.top_k = top_k

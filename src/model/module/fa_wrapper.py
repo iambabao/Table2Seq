@@ -28,17 +28,18 @@ class FAWrapper(tf.nn.rnn_cell.RNNCell):
                  encoder_outputs,
                  attr_size,
                  attr_input_ids,
+                 vocab_size,
                  memory_sequence_length=None,
                  encoder_state_size=None,
                  initial_cell_state=None,
                  name=None):
         super(FAWrapper, self).__init__(name=name)
         self._cell = cell
-
         self._encoder_outputs = encoder_outputs
         self._attr_size = attr_size
         self._attr_input_ids = attr_input_ids
         self._seq_len = tf.shape(attr_input_ids)[-1]
+        self._vocab_size = vocab_size
         self._memory_sequence_length = memory_sequence_length
         if encoder_state_size is None:
             encoder_state_size = self._encoder_outputs.shape[-1].value
@@ -46,13 +47,13 @@ class FAWrapper(tf.nn.rnn_cell.RNNCell):
                 raise ValueError('encoder_state_size must be set.')
         self._initial_cell_state = initial_cell_state
 
-        self._weights_p = tf.get_variable('weights_p', [encoder_state_size, 1])
-        self._weights_q = tf.get_variable('weights_q', [encoder_state_size, 1])
-        self._pi = tf.get_variable(
-            initializer=tf.keras.initializers.random_uniform(0, 1, dtype=tf.float32),
-            shape=[],
-            name='pi'
-        )
+        self._weights_p = tf.get_variable('weights_p', [encoder_state_size, 1], dtype=tf.float32)
+        self._weights_q = tf.get_variable('weights_q', [encoder_state_size, 1], dtype=tf.float32)
+        self._weights_t = tf.get_variable('weights_t', [2 * encoder_state_size, self._vocab_size], dtype=tf.float32)
+        self._weights_s = tf.get_variable('weights_s', [self._vocab_size], dtype=tf.float32)
+        self._pi = tf.get_variable('pi', [],
+                                   initializer=tf.keras.initializers.random_uniform(0, 1, dtype=tf.float32),
+                                   dtype=tf.float32)
 
     def __call__(self, inputs, state, scope=None):
         if not isinstance(state, FAWrapperState):
@@ -60,29 +61,33 @@ class FAWrapper(tf.nn.rnn_cell.RNNCell):
                 'Expected state to be instance of FAWrapper. Received type {} instead.'.format(type(state))
             )
         prev_cell_state = state.cell_state
-        time = state.time + 1
+        prev_time = state.time
         prev_word_coverage = state.word_coverage
         prev_attr_coverage = state.attr_coverage
 
-        word_attention = self._get_word_attention(self._encoder_outputs, prev_cell_state.h)  # [batch_size, seq_len]
+        _, cell_state = self._cell(inputs, prev_cell_state, scope)
+
+        word_attention = self._get_word_attention(self._encoder_outputs, cell_state.h)  # [batch_size, seq_len]
         attr_attention = self._get_attr_attention(word_attention)  # [batch_size, attr_size]
 
         word_coverage = prev_word_coverage + word_attention
-        word_coverage_mean = word_coverage / tf.cast(time, dtype=tf.float32)
+        word_coverage_mean = word_coverage / tf.cast(prev_time + 1, dtype=tf.float32)
         attr_coverage = prev_attr_coverage + attr_attention
-        attr_coverage_mean = attr_coverage / tf.cast(time, dtype=tf.float32)
+        attr_coverage_mean = attr_coverage / tf.cast(prev_time + 1, dtype=tf.float32)
 
         # expand attr_coverage_mean to [batch_size, seq_len] for calculating zeta
         expanded_attr_coverage_mean = tf.gather(attr_coverage_mean, self._attr_input_ids, batch_dims=1)
         zeta = tf.minimum(word_coverage_mean, expanded_attr_coverage_mean)
         zeta = tf.reduce_max(zeta, axis=-1, keepdims=True) - zeta  # [batch_size, seq_len]
 
-        # v = tf.einsum('ijk,ij->ik', self._encoder_outputs, zeta)  # version 1
-        v = tf.reduce_sum(self._encoder_outputs * tf.expand_dims(zeta, axis=-1), axis=1)  # version 2: memory efficiency
-        c = self._pi * prev_cell_state.c + (1 - self._pi) * v  # [batch_size, hidden_size]
+        c = tf.reduce_sum(self._encoder_outputs * tf.expand_dims(word_attention, axis=-1), axis=1)
+        v = tf.reduce_sum(self._encoder_outputs * tf.expand_dims(zeta, axis=-1), axis=1)
+        c_tilde = self._pi * c + (1 - self._pi) * v  # [batch_size, hidden_size]
 
-        outputs, cell_state = self._cell(inputs, tf.nn.rnn_cell.LSTMStateTuple(c=c, h=prev_cell_state.h), scope)
-        state = FAWrapperState(cell_state=cell_state, time=time,
+        sc = tf.concat([cell_state.h, c], axis=-1)
+        # sc = tf.concat([cell_state.h, c_tilde], axis=-1)
+        outputs = tf.expand_dims(self._weights_s, axis=0) * tf.math.tanh(tf.matmul(sc, self._weights_t))  # logits
+        state = FAWrapperState(cell_state=cell_state, time=prev_time + 1,
                                word_coverage=word_coverage, attr_coverage=attr_coverage)
         return outputs, state
 
@@ -129,7 +134,7 @@ class FAWrapper(tf.nn.rnn_cell.RNNCell):
     @property
     def output_size(self):
         """Integer or TensorShape: size of outputs produced by this cell."""
-        return self._cell.output_size
+        return self._vocab_size
 
     def zero_state(self, batch_size, dtype):
         with tf.name_scope(type(self).__name__ + 'ZeroState', values=[batch_size]):

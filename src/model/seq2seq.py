@@ -7,8 +7,9 @@ class Seq2Seq:
     def __init__(self, config, word_embedding_matrix):
         self.sos_id = config.sos_id
         self.eos_id = config.eos_id
-        self.word_size = config.word_size
+        self.vocab_size = config.vocab_size
         self.attr_size = config.attr_size
+        self.pos_size = config.pos_size
         self.max_seq_len = config.sequence_len
         self.beam_size = config.top_k
         self.beam_search = config.beam_search
@@ -35,20 +36,20 @@ class Seq2Seq:
 
         if word_embedding_matrix is not None:
             self.word_embedding = tf.keras.layers.Embedding(
-                self.word_size,
+                self.vocab_size,
                 self.word_em_size,
                 embeddings_initializer=tf.constant_initializer(word_embedding_matrix),
                 trainable=config.embedding_trainable,
                 name='word_embedding'
             )
         else:
-            self.word_embedding = tf.keras.layers.Embedding(self.word_size, self.word_em_size, name='word_embedding')
+            self.word_embedding = tf.keras.layers.Embedding(self.vocab_size, self.word_em_size, name='word_embedding')
         self.attr_embedding = tf.keras.layers.Embedding(self.attr_size, self.attr_em_size, name='attr_embedding')
-        self.pos_embedding = tf.keras.layers.Embedding(self.max_seq_len, self.pos_em_size, name='pos_embedding')
+        self.pos_embedding = tf.keras.layers.Embedding(self.pos_size, self.pos_em_size, name='pos_embedding')
         self.embedding_dropout = tf.keras.layers.Dropout(self.dropout)
         self.encoder_cell = tf.nn.rnn_cell.LSTMCell(self.hidden_size)
         self.decoder_cell = tf.nn.rnn_cell.LSTMCell(self.hidden_size)
-        self.final_dense = tf.layers.Dense(self.word_size, name='final_dense')
+        self.final_dense = tf.layers.Dense(self.vocab_size, name='final_dense')
 
         if config.optimizer == 'Adam':
             self.optimizer = tf.train.AdamOptimizer(self.lr)
@@ -84,7 +85,8 @@ class Seq2Seq:
 
         # decoding in testing
         if not self.beam_search:
-            predicted_ids = self.inference_decoding_layer(enc_output, enc_state, self.src_len, beam_search=self.beam_search)
+            predicted_ids = self.inference_decoding_layer(enc_output, enc_state, self.src_len,
+                                                          beam_search=self.beam_search)
         else:
             # tiled to beam size
             tiled_enc_output = tf.contrib.seq2seq.tile_batch(enc_output, multiplier=self.beam_size)

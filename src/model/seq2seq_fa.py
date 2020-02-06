@@ -8,8 +8,9 @@ class Seq2SeqFA:
     def __init__(self, config, word_embedding_matrix):
         self.sos_id = config.sos_id
         self.eos_id = config.eos_id
-        self.word_size = config.word_size
+        self.vocab_size = config.vocab_size
         self.attr_size = config.attr_size
+        self.pos_size = config.pos_size
         self.max_seq_len = config.sequence_len
         self.beam_size = config.top_k
         self.beam_search = config.beam_search
@@ -36,20 +37,19 @@ class Seq2SeqFA:
 
         if word_embedding_matrix is not None:
             self.word_embedding = tf.keras.layers.Embedding(
-                self.word_size,
+                self.vocab_size,
                 self.word_em_size,
                 embeddings_initializer=tf.constant_initializer(word_embedding_matrix),
                 trainable=config.embedding_trainable,
                 name='word_embedding'
             )
         else:
-            self.word_embedding = tf.keras.layers.Embedding(self.word_size, self.word_em_size, name='word_embedding')
+            self.word_embedding = tf.keras.layers.Embedding(self.vocab_size, self.word_em_size, name='word_embedding')
         self.attr_embedding = tf.keras.layers.Embedding(self.attr_size, self.attr_em_size, name='attr_embedding')
-        self.pos_embedding = tf.keras.layers.Embedding(self.max_seq_len, self.pos_em_size, name='pos_embedding')
+        self.pos_embedding = tf.keras.layers.Embedding(self.pos_size, self.pos_em_size, name='pos_embedding')
         self.embedding_dropout = tf.keras.layers.Dropout(self.dropout)
         self.encoder_cell = tf.nn.rnn_cell.LSTMCell(self.hidden_size)
         self.decoder_cell = tf.nn.rnn_cell.LSTMCell(self.hidden_size)
-        self.final_dense = tf.layers.Dense(self.word_size, name='final_dense')
 
         if config.optimizer == 'Adam':
             self.optimizer = tf.train.AdamOptimizer(self.lr)
@@ -141,6 +141,7 @@ class Seq2SeqFA:
                 enc_output,
                 attr_size=self.attr_size,
                 attr_input_ids=self.attr_inp,
+                vocab_size=self.vocab_size,
                 memory_sequence_length=self.src_len
             )
 
@@ -149,17 +150,19 @@ class Seq2SeqFA:
 
         # build teacher forcing decoder
         helper = tf.contrib.seq2seq.TrainingHelper(tgt_em, self.tgt_len)
-        decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell, helper, dec_initial_state, self.final_dense)
+        decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell, helper, dec_initial_state)
 
         with tf.variable_scope('decoder', reuse=False):
-            final_outputs, final_state, final_sequence_lengths = tf.contrib.seq2seq.dynamic_decode(decoder)
+            final_outputs, final_state, final_sequence_lengths = tf.contrib.seq2seq.dynamic_decode(decoder, impute_finished=True)
 
         logits = final_outputs.rnn_output
 
         attr_coverage = final_state.attr_coverage
-        num_attr = tf.reduce_sum(tf.cast(tf.greater(attr_coverage, 0.0), dtype=tf.float32), axis=-1, keepdims=True)
         attr_coverage_mean = attr_coverage / tf.expand_dims(tf.cast(final_sequence_lengths, dtype=tf.float32), axis=-1)
-        coverage_loss = tf.reduce_mean(0.3 * tf.reduce_sum((attr_coverage_mean - tf.div_no_nan(1.0, num_attr))**2, axis=-1))
+        num_attr = tf.reduce_sum(tf.cast(tf.greater(attr_coverage, 0.0), dtype=tf.float32), axis=-1, keepdims=True)
+        coverage_loss = tf.reduce_mean(
+            0.3 * tf.reduce_sum((attr_coverage_mean - tf.div_no_nan(1.0, num_attr))**2, axis=-1)
+        )
 
         return logits, coverage_loss
 
@@ -171,6 +174,7 @@ class Seq2SeqFA:
                 enc_output,
                 attr_size=self.attr_size,
                 attr_input_ids=self.attr_inp,
+                vocab_size=self.vocab_size,
                 memory_sequence_length=self.src_len
             )
 
@@ -184,7 +188,7 @@ class Seq2SeqFA:
                 tf.fill([tf.shape(self.src_len)[0]], self.sos_id),
                 self.eos_id
             )
-            decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell, helper, dec_initial_state, self.final_dense)
+            decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell, helper, dec_initial_state)
         else:
             # build beam search decoder
             decoder = tf.contrib.seq2seq.BeamSearchDecoder(
@@ -194,7 +198,6 @@ class Seq2SeqFA:
                 end_token=self.eos_id,
                 initial_state=dec_initial_state,
                 beam_width=self.beam_size,
-                output_layer=self.final_dense,
                 length_penalty_weight=0.0,
                 coverage_penalty_weight=0.0
             )

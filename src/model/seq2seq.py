@@ -50,6 +50,7 @@ class Seq2Seq:
         self.encoder_cell = tf.nn.rnn_cell.LSTMCell(self.hidden_size)
         self.decoder_cell = tf.nn.rnn_cell.LSTMCell(self.hidden_size)
         self.final_dense = tf.layers.Dense(self.vocab_size, name='final_dense')
+        self.transparent_layer = tf.keras.layers.Dropout(0)
 
         if config.optimizer == 'Adam':
             self.optimizer = tf.train.AdamOptimizer(self.lr)
@@ -145,7 +146,7 @@ class Seq2Seq:
             decoder_cell = tf.contrib.seq2seq.AttentionWrapper(
                 self.decoder_cell,
                 attention_mechanism,
-                attention_layer_size=self.hidden_size
+                attention_layer=self.transparent_layer
             )
 
         dec_initial_state = decoder_cell.zero_state(batch_size=tf.shape(enc_output)[0], dtype=tf.float32)
@@ -174,7 +175,7 @@ class Seq2Seq:
             decoder_cell = tf.contrib.seq2seq.AttentionWrapper(
                 self.decoder_cell,
                 attention_mechanism,
-                attention_layer_size=self.hidden_size
+                attention_layer=self.transparent_layer
             )
 
         dec_initial_state = decoder_cell.zero_state(batch_size=tf.shape(enc_output)[0], dtype=tf.float32)

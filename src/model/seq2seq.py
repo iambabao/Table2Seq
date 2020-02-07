@@ -195,9 +195,9 @@ class Seq2Seq:
                 embedding=self.word_embedding,
                 start_tokens=tf.fill([tf.shape(self.src_len)[0]], self.sos_id),
                 end_token=self.eos_id,
+                output_layer=self.final_dense,
                 initial_state=dec_initial_state,
                 beam_width=self.beam_size,
-                output_layer=self.final_dense,
                 length_penalty_weight=0.0,
                 coverage_penalty_weight=0.0
             )

@@ -1,6 +1,6 @@
 import tensorflow as tf
 
-from .module.fa_wrapper import FAWrapper
+from .module.force_attention_wrapper import ForceAttentionWrapper
 from .module.metrics import get_loss, get_accuracy
 
 
@@ -50,6 +50,7 @@ class Seq2SeqFA:
         self.embedding_dropout = tf.keras.layers.Dropout(self.dropout)
         self.encoder_cell = tf.nn.rnn_cell.LSTMCell(self.hidden_size)
         self.decoder_cell = tf.nn.rnn_cell.LSTMCell(self.hidden_size)
+        self.final_dense = tf.layers.Dense(self.vocab_size, name='final_dense')
 
         if config.optimizer == 'Adam':
             self.optimizer = tf.train.AdamOptimizer(self.lr)
@@ -136,12 +137,12 @@ class Seq2SeqFA:
     def training_decoding_layer(self, enc_output, enc_state, tgt_em):
         # add force attention mechanism to decoder cell
         with tf.variable_scope('force_attention_mechanism', reuse=False):
-            decoder_cell = FAWrapper(
+            decoder_cell = ForceAttentionWrapper(
                 self.decoder_cell,
                 enc_output,
+                self.attr_inp,
+                attention_size=self.hidden_size,
                 attr_size=self.attr_size,
-                attr_input_ids=self.attr_inp,
-                vocab_size=self.vocab_size,
                 memory_sequence_length=self.src_len
             )
 
@@ -150,7 +151,7 @@ class Seq2SeqFA:
 
         # build teacher forcing decoder
         helper = tf.contrib.seq2seq.TrainingHelper(tgt_em, self.tgt_len)
-        decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell, helper, dec_initial_state)
+        decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell, helper, dec_initial_state, self.final_dense)
 
         with tf.variable_scope('decoder', reuse=False):
             final_outputs, final_state, final_sequence_lengths = tf.contrib.seq2seq.dynamic_decode(decoder, impute_finished=True)
@@ -159,22 +160,20 @@ class Seq2SeqFA:
 
         attr_coverage = final_state.attr_coverage
         attr_coverage_mean = attr_coverage / tf.expand_dims(tf.cast(final_sequence_lengths, dtype=tf.float32), axis=-1)
-        num_attr = tf.reduce_sum(tf.cast(tf.greater(attr_coverage, 0.0), dtype=tf.float32), axis=-1, keepdims=True)
-        coverage_loss = tf.reduce_mean(
-            0.3 * tf.reduce_sum((attr_coverage_mean - tf.div_no_nan(1.0, num_attr))**2, axis=-1)
-        )
+        k = tf.reduce_sum(tf.cast(tf.greater(attr_coverage, 0.0), dtype=tf.float32), axis=-1, keepdims=True)
+        coverage_loss = tf.reduce_mean(0.3 * tf.reduce_sum((attr_coverage_mean - tf.div_no_nan(1.0, k))**2, axis=-1))
 
         return logits, coverage_loss
 
     def inference_decoding_layer(self, enc_output, enc_state, beam_search):
         # add force attention mechanism to decoder cell
         with tf.variable_scope('force_attention_mechanism', reuse=True):
-            decoder_cell = FAWrapper(
+            decoder_cell = ForceAttentionWrapper(
                 self.decoder_cell,
                 enc_output,
+                self.attr_inp,
+                attention_size=self.hidden_size,
                 attr_size=self.attr_size,
-                attr_input_ids=self.attr_inp,
-                vocab_size=self.vocab_size,
                 memory_sequence_length=self.src_len
             )
 
@@ -188,7 +187,7 @@ class Seq2SeqFA:
                 tf.fill([tf.shape(self.src_len)[0]], self.sos_id),
                 self.eos_id
             )
-            decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell, helper, dec_initial_state)
+            decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell, helper, dec_initial_state, self.final_dense)
         else:
             # build beam search decoder
             decoder = tf.contrib.seq2seq.BeamSearchDecoder(
@@ -196,6 +195,7 @@ class Seq2SeqFA:
                 embedding=self.word_embedding,
                 start_tokens=tf.fill([tf.shape(self.src_len)[0]], self.sos_id),
                 end_token=self.eos_id,
+                output_layer=self.final_dense,
                 initial_state=dec_initial_state,
                 beam_width=self.beam_size,
                 length_penalty_weight=0.0,

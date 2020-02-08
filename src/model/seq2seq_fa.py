@@ -93,8 +93,7 @@ class Seq2SeqFA:
             # tiled to beam size
             tiled_enc_output = tf.contrib.seq2seq.tile_batch(enc_output, multiplier=self.beam_size)
             tiled_enc_state = tf.contrib.seq2seq.tile_batch(enc_state, multiplier=self.beam_size)
-            predicted_ids = self.inference_decoding_layer(tiled_enc_output, tiled_enc_state,
-                                                          beam_search=self.beam_search)
+            predicted_ids = self.inference_decoding_layer(tiled_enc_output, tiled_enc_state, beam_search=self.beam_search)
 
         return logits, coverage_loss, predicted_ids
 

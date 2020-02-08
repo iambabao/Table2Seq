@@ -237,7 +237,7 @@ def main():
     if args.do_train:
         print('loading data...')
         train_data = data_reader.read_train_data()
-        valid_data = data_reader.read_valid_data()
+        valid_data = data_reader.read_valid_data(max_data_size=10000)
 
         print_title('Trainable Variables')
         for v in tf.trainable_variables():
@@ -275,7 +275,7 @@ def main():
                 print('loading model from {}...'.format(model_file))
                 saver.restore(sess, model_file)
 
-                valid_loss, valid_accu = run_evaluate(sess, model, valid_data, valid_summary_writer=None, verbose=True)
+                valid_loss, valid_accu = run_evaluate(sess, model, valid_data, verbose=True)
                 print('average valid loss: {:>.4f}, average valid accuracy: {:>.4f}'.format(valid_loss, valid_accu))
             else:
                 print('model not found!')

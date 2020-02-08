@@ -89,11 +89,10 @@ def pos_text_zh(text):
 
 def make_batch_iter(data, batch_size, shuffle, verbose=True):
     data_size = len(data)
+    num_batches = (data_size + batch_size - 1) // batch_size
 
     if shuffle:
         random.shuffle(data)
-
-    num_batches = (data_size + batch_size - 1) // batch_size
     if verbose:
         print('total batches: {}'.format(num_batches))
     for i in range(num_batches):

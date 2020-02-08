@@ -10,7 +10,7 @@ class DataReader:
         self.word_2_id = word_2_id
         self.attr_2_id = attr_2_id
 
-    def _read_data(self, data_file):
+    def _read_data(self, data_file, max_data_size=None):
         value_seq = []
         attr_seq = []
         pos_fw_seq = []
@@ -66,15 +66,17 @@ class DataReader:
                 counter += 1
                 if counter % 10000 == 0:
                     print('\rprocessing file {}: {:>6d}'.format(data_file, counter), end='')
+                if max_data_size and counter >= max_data_size:
+                    break
             print()
 
         return value_seq, attr_seq, pos_fw_seq, pos_bw_seq, desc_seq
 
-    def read_train_data(self):
-        return self._read_data(self.config.train_data)
+    def read_train_data(self, max_data_size=None):
+        return self._read_data(self.config.train_data, max_data_size)
 
-    def read_valid_data(self):
-        return self._read_data(self.config.valid_data)
+    def read_valid_data(self, max_data_size=None):
+        return self._read_data(self.config.valid_data, max_data_size)
 
-    def read_test_data(self):
-        return self._read_data(self.config.test_data)
+    def read_test_data(self, max_data_size=None):
+        return self._read_data(self.config.test_data, max_data_size)

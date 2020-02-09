@@ -16,6 +16,7 @@ class Config:
         self.train_data = os.path.join(self.data_dir, 'train_1480.json')
         self.valid_data = os.path.join(self.data_dir, 'valid_1480.json')
         self.test_data = os.path.join(self.data_dir, 'test_1480.json')
+        self.valid_data_small = os.path.join(self.data_dir, 'valid_1480_small.json')
         self.word_dict = os.path.join(self.data_dir, 'dict_word.json')
         self.attr_dict = os.path.join(self.data_dir, 'dict_attr.json')
 

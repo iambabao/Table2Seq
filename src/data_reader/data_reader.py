@@ -5,10 +5,8 @@ from src.utils import convert_list
 
 
 class DataReader:
-    def __init__(self, config, word_2_id, attr_2_id):
+    def __init__(self, config):
         self.config = config
-        self.word_2_id = word_2_id
-        self.attr_2_id = attr_2_id
 
     def _read_data(self, data_file, max_data_size=None):
         value_seq = []
@@ -28,6 +26,8 @@ class DataReader:
                 pos_bw = []
                 box = we.get_box()
                 for a in box.keys():
+                    if box[a] == 'none':
+                        continue
                     v = box[a].split()
                     a = [a] * len(v)
                     p = list(range(len(v)))
@@ -57,11 +57,11 @@ class DataReader:
                     desc = list(map(str.lower, desc))
                 desc = [self.config.sos] + desc + [self.config.eos]
 
-                value_seq.append(convert_list(value, self.word_2_id, self.config.pad_id, self.config.unk_id))
-                attr_seq.append(convert_list(attr, self.attr_2_id, self.config.pad_id, self.config.unk_id))
+                value_seq.append(convert_list(value, self.config.word_2_id, self.config.pad_id, self.config.unk_id))
+                attr_seq.append(convert_list(attr, self.config.attr_2_id, self.config.pad_id, self.config.unk_id))
                 pos_fw_seq.append(pos_fw)
                 pos_bw_seq.append(pos_bw)
-                desc_seq.append(convert_list(desc, self.word_2_id, self.config.pad_id, self.config.unk_id))
+                desc_seq.append(convert_list(desc, self.config.word_2_id, self.config.pad_id, self.config.unk_id))
 
                 counter += 1
                 if counter % 10000 == 0:
@@ -80,3 +80,6 @@ class DataReader:
 
     def read_test_data(self, max_data_size=None):
         return self._read_data(self.config.test_data, max_data_size)
+
+    def read_valid_data_small(self, max_data_size=None):
+        return self._read_data(self.config.valid_data_small, max_data_size)

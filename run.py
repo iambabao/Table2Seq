@@ -91,9 +91,10 @@ def run_test(sess, model, test_data, verbose=True):
 
 def run_evaluate(sess, model, valid_data, valid_summary_writer=None, verbose=True):
     steps = 0
+    outputs = []
     total_loss = 0.0
     total_accu = 0.0
-    batch_iter = make_batch_iter(list(zip(*valid_data)), config.batch_size, shuffle=True, verbose=verbose)
+    batch_iter = make_batch_iter(list(zip(*valid_data)), config.batch_size, shuffle=False, verbose=verbose)
     for batch in batch_iter:
         value_seq, attr_seq, pos_fw_seq, pos_bw_seq, desc_seq = list(zip(*batch))
         src_len_seq = np.array([len(src) for src in value_seq])
@@ -105,8 +106,8 @@ def run_evaluate(sess, model, valid_data, valid_summary_writer=None, verbose=Tru
         pos_bw_seq = np.array(pad_batch(pos_bw_seq, config.pad_id))
         desc_seq = np.array(pad_batch(desc_seq, config.pad_id))
 
-        loss, accu, global_step, summary = sess.run(
-            [model.loss, model.accu, model.global_step, model.summary],
+        predicted_ids, loss, accu, global_step, summary = sess.run(
+            [model.predicted_ids, model.loss, model.accu, model.global_step, model.summary],
             feed_dict={
                 model.value_inp: value_seq,
                 model.attr_inp: attr_seq,
@@ -119,6 +120,7 @@ def run_evaluate(sess, model, valid_data, valid_summary_writer=None, verbose=Tru
                 model.training: False
             }
         )
+        outputs.extend(refine_outputs(predicted_ids.tolist()))
 
         steps += 1
         total_loss += loss
@@ -129,13 +131,13 @@ def run_evaluate(sess, model, valid_data, valid_summary_writer=None, verbose=Tru
             valid_summary_writer.add_summary(summary, global_step)
     print()
 
-    return total_loss / steps, total_accu / steps
+    return outputs, total_loss / steps, total_accu / steps
 
 
-def run_train(sess, model, train_data, valid_data, saver,
+def run_train(sess, model, train_data, valid_data, saver, evaluator,
               train_summary_writer=None, valid_summary_writer=None, verbose=True):
     flag = 0
-    loss_log = 1e9
+    train_log = 0.0
     global_step = 0
     for i in range(config.num_epoch):
         print_title('Train Epoch: {}'.format(i + 1))
@@ -182,14 +184,17 @@ def run_train(sess, model, train_data, valid_data, saver,
                 saver.save(sess, config.model_file, global_step=global_step)
                 # evaluate saved models after pre-train epochs
                 if i + 1 > args.pre_train_epochs:
-                    valid_loss, valid_accu = run_evaluate(sess, model, valid_data, valid_summary_writer, verbose=False)
+                    outputs, valid_loss, valid_accu = run_evaluate(sess, model, valid_data, valid_summary_writer, verbose=False)
                     print_title('Valid Result', sep='*')
                     print('average valid loss: {:>.4f}, average valid accuracy: {:>.4f}'.format(valid_loss, valid_accu))
+                    print_title('Saving Result')
+                    save_result(outputs, config.valid_result, config.id_2_word)
+                    eval_results = evaluator.evaluate(config.valid_data_small, config.valid_result, config.to_lower)
 
-                    # early stop training when the loss on validation set do not decrease for more than 5 epochs
-                    if valid_loss < loss_log:
+                    # early stop
+                    if eval_results['Bleu_4'] > train_log:
                         flag = 0
-                        loss_log = valid_loss
+                        train_log = eval_results['Bleu_4']
                     elif flag < 5:
                         flag += 1
                     elif args.early_stop:
@@ -210,16 +215,16 @@ def main():
         os.makedirs(config.valid_log_dir)
 
     print('preparing data...')
-    word_2_id, id_2_word = read_dict(config.word_dict)
-    attr_2_id, id_2_attr = read_dict(config.attr_dict)
-    config.word_size = len(word_2_id)
-    config.attr_size = len(attr_2_id)
+    config.word_2_id, config.id_2_word = read_dict(config.word_dict)
+    config.attr_2_id, config.id_2_attr = read_dict(config.attr_dict)
+    config.word_size = len(config.word_2_id)
+    config.attr_size = len(config.attr_2_id)
 
     embedding_matrix = None
     if args.do_train:
         if os.path.exists(config.glove_file):
             print('loading embedding matrix from file: {}'.format(config.glove_file))
-            embedding_matrix, config.word_em_size = load_glove_embedding(config.glove_file, list(word_2_id.keys()))
+            embedding_matrix, config.word_em_size = load_glove_embedding(config.glove_file, list(config.word_2_id.keys()))
             print('shape of embedding matrix: {}'.format(embedding_matrix.shape))
     else:
         if os.path.exists(config.glove_file):
@@ -227,7 +232,7 @@ def main():
                 line = fin.readline()
                 config.word_em_size = len(line.strip().split()) - 1
 
-    data_reader = DataReader(config, word_2_id, attr_2_id)
+    data_reader = DataReader(config)
     evaluator = Evaluator('description')
 
     print('building model...')
@@ -237,7 +242,7 @@ def main():
     if args.do_train:
         print('loading data...')
         train_data = data_reader.read_train_data()
-        valid_data = data_reader.read_valid_data(max_data_size=10000)
+        valid_data = data_reader.read_valid_data_small()
 
         print_title('Trainable Variables')
         for v in tf.trainable_variables():
@@ -261,7 +266,7 @@ def main():
             train_writer = tf.summary.FileWriter(config.train_log_dir, sess.graph)
             valid_writer = tf.summary.FileWriter(config.valid_log_dir, sess.graph)
 
-            run_train(sess, model, train_data, valid_data, saver, train_writer, valid_writer, verbose=True)
+            run_train(sess, model, train_data, valid_data, saver, evaluator, train_writer, valid_writer, verbose=True)
 
     if args.do_eval:
         print('loading data...')
@@ -275,8 +280,11 @@ def main():
                 print('loading model from {}...'.format(model_file))
                 saver.restore(sess, model_file)
 
-                valid_loss, valid_accu = run_evaluate(sess, model, valid_data, verbose=True)
+                outputs, valid_loss, valid_accu = run_evaluate(sess, model, valid_data, verbose=True)
                 print('average valid loss: {:>.4f}, average valid accuracy: {:>.4f}'.format(valid_loss, valid_accu))
+                print_title('Saving Result')
+                save_result(outputs, config.valid_result, config.id_2_word)
+                evaluator.evaluate(config.valid_data, config.valid_result, config.to_lower)
             else:
                 print('model not found!')
 
@@ -295,7 +303,7 @@ def main():
                 outputs = run_test(sess, model, test_data, verbose=True)
 
                 print_title('Saving Result')
-                save_result(outputs, config.test_result, id_2_word)
+                save_result(outputs, config.test_result, config.id_2_word)
                 evaluator.evaluate(config.test_data, config.test_result, config.to_lower)
             else:
                 print('model not found!')

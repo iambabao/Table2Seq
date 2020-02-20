@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+
+"""
+@Author     : Bao
+@Date       : 2020/2/20 21:39
+@Desc       :
+"""
+
 import collections
 
 from src.config import Config
@@ -5,7 +13,7 @@ from src.wikientity import WikiEntity
 from src.utils import read_json_lines, save_json
 
 
-def build_word_dict(config):
+def build_word_dict(config, min_freq=5):
     cnt = 0
     word_cnt = collections.Counter()
     attr_cnt = collections.Counter()
@@ -44,12 +52,14 @@ def build_word_dict(config):
     print('number of words in attribute counter: {}'.format(len(attr_cnt)))
 
     word_dict = {}
-    for word, _ in word_cnt.most_common(config.word_size):
+    for word, cnt in word_cnt.most_common():
+        if cnt < min_freq:
+            break
         word_dict[word] = len(word_dict)
     save_json(word_dict, config.word_dict)
 
     attr_dict = {}
-    for attr, _ in attr_cnt.most_common(config.attr_size):
+    for attr, _ in attr_cnt.most_common():
         attr_dict[attr] = len(attr_dict)
     save_json(attr_dict, config.attr_dict)
 

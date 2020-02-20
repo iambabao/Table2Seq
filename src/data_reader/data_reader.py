@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+
+"""
+@Author     : Bao
+@Date       : 2020/2/20 21:39
+@Desc       :
+"""
+
 import numpy as np
 
 from src.wikientity import WikiEntity
@@ -26,8 +34,6 @@ class DataReader:
                 pos_bw = []
                 box = we.get_box()
                 for a in box.keys():
-                    if box[a] == 'none':
-                        continue
                     v = box[a].split()
                     a = [a] * len(v)
                     p = list(range(len(v)))
@@ -43,6 +49,7 @@ class DataReader:
                 assert len(value) == len(pos_bw)
                 if len(value) == 0:
                     continue
+
                 value = value[:self.config.sequence_len]
                 attr = attr[:self.config.sequence_len]
                 pos_fw = pos_fw[:self.config.sequence_len]

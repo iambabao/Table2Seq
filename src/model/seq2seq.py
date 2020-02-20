@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+
+"""
+@Author     : Bao
+@Date       : 2020/2/20 21:39
+@Desc       :
+"""
+
 import tensorflow as tf
 
 from .module.metrics import get_loss, get_accuracy
@@ -8,11 +16,10 @@ class Seq2Seq:
         self.sos_id = config.sos_id
         self.eos_id = config.eos_id
         self.vocab_size = config.vocab_size
+        self.oov_vocab_size = config.oov_vocab_size
         self.attr_size = config.attr_size
         self.pos_size = config.pos_size
         self.max_seq_len = config.sequence_len
-        self.beam_size = config.top_k
-        self.beam_search = config.beam_search
 
         self.word_em_size = config.word_em_size
         self.attr_em_size = config.attr_em_size
@@ -36,14 +43,17 @@ class Seq2Seq:
 
         if word_embedding_matrix is not None:
             self.word_embedding = tf.keras.layers.Embedding(
-                self.vocab_size,
+                self.vocab_size + self.oov_vocab_size,
                 self.word_em_size,
                 embeddings_initializer=tf.constant_initializer(word_embedding_matrix),
-                trainable=config.embedding_trainable,
                 name='word_embedding'
             )
         else:
-            self.word_embedding = tf.keras.layers.Embedding(self.vocab_size, self.word_em_size, name='word_embedding')
+            self.word_embedding = tf.keras.layers.Embedding(
+                self.vocab_size + self.oov_vocab_size,
+                self.word_em_size,
+                name='word_embedding'
+            )
         self.attr_embedding = tf.keras.layers.Embedding(self.attr_size, self.attr_em_size, name='attr_embedding')
         self.pos_embedding = tf.keras.layers.Embedding(self.pos_size, self.pos_em_size, name='pos_embedding')
         self.embedding_dropout = tf.keras.layers.Dropout(self.dropout)
@@ -63,9 +73,15 @@ class Seq2Seq:
         else:
             assert False
 
-        logits, self.predicted_ids = self.forward()
-        self.loss = get_loss(self.desc_out, logits)
-        self.accu = get_accuracy(self.desc_out, logits)
+        logits, self.predicted_ids, self.alignment_history = self.forward()
+
+        clipped_desc_out = tf.where(
+            tf.greater_equal(self.desc_out, self.vocab_size),
+            tf.ones_like(self.desc_out) * config.unk_id,
+            self.desc_out
+        )
+        self.loss = get_loss(clipped_desc_out, logits)
+        self.accu = get_accuracy(clipped_desc_out, logits)
         self.gradients, self.train_op = self.get_train_op()
 
         tf.summary.scalar('learning_rate', self.lr() if callable(self.lr) else self.lr)
@@ -75,8 +91,8 @@ class Seq2Seq:
 
     def forward(self):
         # embedding
-        src_em = self.src_embedding_layer(training=self.training)
-        tgt_em = self.tgt_embedding_layer(training=self.training)
+        src_em = self.src_embedding_layer()
+        tgt_em = self.tgt_embedding_layer()
 
         # encoding
         enc_output, enc_state = self.encoding_layer(src_em)
@@ -85,41 +101,31 @@ class Seq2Seq:
         logits = self.training_decoding_layer(enc_output, enc_state, tgt_em)
 
         # decoding in testing
-        if not self.beam_search:
-            predicted_ids = self.inference_decoding_layer(enc_output, enc_state, self.src_len,
-                                                          beam_search=self.beam_search)
-        else:
-            # tiled to beam size
-            tiled_enc_output = tf.contrib.seq2seq.tile_batch(enc_output, multiplier=self.beam_size)
-            tiled_enc_state = tf.contrib.seq2seq.tile_batch(enc_state, multiplier=self.beam_size)
-            tiled_src_len = tf.contrib.seq2seq.tile_batch(self.src_len, multiplier=self.beam_size)
-            predicted_ids = self.inference_decoding_layer(tiled_enc_output, tiled_enc_state, tiled_src_len,
-                                                          beam_search=self.beam_search)
+        predicted_ids, alignment_history = self.inference_decoding_layer(enc_output, enc_state, self.src_len)
 
-        return logits, predicted_ids
+        return logits, predicted_ids, alignment_history
 
     def get_train_op(self):
         gradients = tf.gradients(self.loss, tf.trainable_variables())
-        # gradients, _ = tf.clip_by_global_norm(gradients, 5)
+        gradients, _ = tf.clip_by_global_norm(gradients, 5)
         train_op = self.optimizer.apply_gradients(zip(gradients, tf.trainable_variables()), self.global_step)
 
         return gradients, train_op
 
-    def src_embedding_layer(self, training):
+    def src_embedding_layer(self):
         with tf.device('/cpu:0'):
             value_em = self.word_embedding(self.value_inp)
             attr_em = self.attr_embedding(self.attr_inp)
             pos_fw_em = self.pos_embedding(self.pos_fw_inp)
             pos_bw_em = self.pos_embedding(self.pos_bw_inp)
         src_em = tf.concat([value_em, attr_em, pos_fw_em, pos_bw_em], axis=-1)
-        src_em = self.embedding_dropout(src_em, training=training)
+        src_em = self.embedding_dropout(src_em, training=self.training)
 
         return src_em
 
-    def tgt_embedding_layer(self, training):
+    def tgt_embedding_layer(self):
         with tf.device('/cpu:0'):
-            desc_em = self.word_embedding(self.desc_inp)
-        tgt_em = self.embedding_dropout(desc_em, training=training)
+            tgt_em = self.word_embedding(self.desc_inp)
 
         return tgt_em
 
@@ -135,53 +141,51 @@ class Seq2Seq:
         return enc_output, enc_state
 
     def training_decoding_layer(self, enc_output, enc_state, tgt_em):
-        # add attention mechanism to decoder cell
-        with tf.variable_scope('attention_mechanism', reuse=False):
+        with tf.variable_scope('decoder', reuse=False):
+            # add attention mechanism to decoder cell
             attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
                 self.hidden_size,
                 enc_output,
                 memory_sequence_length=self.src_len
             )
-
             decoder_cell = tf.contrib.seq2seq.AttentionWrapper(
                 self.decoder_cell,
                 attention_mechanism,
                 attention_layer=self.transparent_layer
             )
 
-        dec_initial_state = decoder_cell.zero_state(batch_size=tf.shape(enc_output)[0], dtype=tf.float32)
-        dec_initial_state = dec_initial_state.clone(cell_state=enc_state)
+            dec_initial_state = decoder_cell.zero_state(batch_size=tf.shape(enc_output)[0], dtype=tf.float32)
+            dec_initial_state = dec_initial_state.clone(cell_state=enc_state)
 
-        # build teacher forcing decoder
-        helper = tf.contrib.seq2seq.TrainingHelper(tgt_em, self.tgt_len)
-        decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell, helper, dec_initial_state, self.final_dense)
+            # build teacher forcing decoder
+            helper = tf.contrib.seq2seq.TrainingHelper(tgt_em, self.tgt_len)
+            decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell, helper, dec_initial_state, self.final_dense)
 
-        with tf.variable_scope('decoder', reuse=False):
+            # decoding
             final_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder)
 
-        logits = final_outputs.rnn_output
+            logits = final_outputs.rnn_output
 
         return logits
 
-    def inference_decoding_layer(self, enc_output, enc_state, src_len, beam_search):
-        # add attention mechanism to decoder cell
-        with tf.variable_scope('attention_mechanism', reuse=True):
+    def inference_decoding_layer(self, enc_output, enc_state, src_len):
+        with tf.variable_scope('decoder', reuse=True):
+            # add attention mechanism to decoder cell
             attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
                 self.hidden_size,
                 enc_output,
                 memory_sequence_length=src_len
             )
-
             decoder_cell = tf.contrib.seq2seq.AttentionWrapper(
                 self.decoder_cell,
                 attention_mechanism,
-                attention_layer=self.transparent_layer
+                attention_layer=self.transparent_layer,
+                alignment_history=True
             )
 
-        dec_initial_state = decoder_cell.zero_state(batch_size=tf.shape(enc_output)[0], dtype=tf.float32)
-        dec_initial_state = dec_initial_state.clone(cell_state=enc_state)
+            dec_initial_state = decoder_cell.zero_state(batch_size=tf.shape(enc_output)[0], dtype=tf.float32)
+            dec_initial_state = dec_initial_state.clone(cell_state=enc_state)
 
-        if not beam_search:
             # build greedy decoder
             helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(
                 self.word_embedding,
@@ -189,29 +193,11 @@ class Seq2Seq:
                 self.eos_id
             )
             decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell, helper, dec_initial_state, self.final_dense)
-        else:
-            # build beam search decoder
-            decoder = tf.contrib.seq2seq.BeamSearchDecoder(
-                cell=decoder_cell,
-                embedding=self.word_embedding,
-                start_tokens=tf.fill([tf.shape(self.src_len)[0]], self.sos_id),
-                end_token=self.eos_id,
-                output_layer=self.final_dense,
-                initial_state=dec_initial_state,
-                beam_width=self.beam_size,
-                length_penalty_weight=0.0,
-                coverage_penalty_weight=0.0
-            )
 
-        # decoding
-        with tf.variable_scope('decoder', reuse=True):
-            final_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder, maximum_iterations=self.max_seq_len)
+            # decoding
+            final_outputs, final_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder, maximum_iterations=self.max_seq_len)
 
-        if not beam_search:
             predicted_ids = final_outputs.sample_id
-        else:
-            predicted_ids = final_outputs.predicted_ids  # (batch_size, seq_len, beam_size)
-            predicted_ids = tf.transpose(predicted_ids, perm=[0, 2, 1])  # (batch_size, beam_size, seq_len)
-            predicted_ids = predicted_ids[:, 0, :]  # keep top one
+            alignment_history = tf.transpose(final_state.alignment_history.stack(), perm=[1, 0, 2])
 
-        return predicted_ids
+        return predicted_ids, alignment_history

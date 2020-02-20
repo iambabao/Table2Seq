@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+
+"""
+@Author     : Bao
+@Date       : 2020/2/20 21:39
+@Desc       :
+"""
+
 from .seq2seq import Seq2Seq
 from .seq2seq_fa import Seq2SeqFA
 

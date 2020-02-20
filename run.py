@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+
+"""
+@Author     : Bao
+@Date       : 2020/2/20 21:39
+@Desc       :
+"""
+
 import os
 import time
 import json
@@ -10,6 +18,7 @@ from src.data_reader import DataReader
 from src.evaluator import Evaluator
 from src.model import get_model
 from src.utils import read_dict, load_glove_embedding, make_batch_iter, pad_batch, convert_list, print_title
+from src.wikientity import WikiEntity
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', '-m', type=str, required=True)
@@ -20,18 +29,16 @@ parser.add_argument('--epoch', type=int, default=30)
 parser.add_argument('--batch', type=int, default=32)
 parser.add_argument('--optimizer', type=str, default='Adam')
 parser.add_argument('--lr', type=float, default=1e-3)
-parser.add_argument('--em', action='store_true', default=False)
 parser.add_argument('--model_file', type=str)
 parser.add_argument('--log_steps', type=int, default=10)
 parser.add_argument('--save_steps', type=int, default=100)
 parser.add_argument('--pre_train_epochs', type=int, default=4)
 parser.add_argument('--early_stop', action='store_true', default=False)
-parser.add_argument('--beam_search', action='store_true', default=False)
 args = parser.parse_args()
 
-config = Config('.', args.model, num_epoch=args.epoch, batch_size=args.batch,
-                optimizer=args.optimizer, lr=args.lr,
-                embedding_trainable=args.em, beam_search=args.beam_search)
+config = Config('.', args.model,
+                num_epoch=args.epoch, batch_size=args.batch,
+                optimizer=args.optimizer, lr=args.lr)
 
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 # os.environ['CUDA_VISIBLE_DEVICES'] = ''
@@ -39,26 +46,37 @@ sess_config = tf.ConfigProto(allow_soft_placement=True)
 sess_config.gpu_options.allow_growth = True
 
 
-def save_result(outputs, result_file, id_2_label):
-    with open(result_file, 'w', encoding='utf-8') as fout:
-        for line in outputs:
-            res = {
-                'description': ' '.join(convert_list(line, id_2_label, config.pad, config.unk))
-            }
-            print(json.dumps(res, ensure_ascii=False), file=fout)
+def save_result(predicted_ids, alignment_history, id_2_label, input_file, output_file):
+    src_inputs = []
+    with open(input_file, 'r', encoding='utf-8') as fin:
+        for line in fin:
+            line = WikiEntity(line)
+            box = line.get_box()
+            if len(box) == 0:
+                continue
+            src = []
+            for a in box.keys():
+                src += box[a].split()
+            src_inputs.append(src)
 
+    tgt_outputs = []
+    for tgt in predicted_ids:
+        tgt[-1] = config.eos_id
+        tgt_outputs.append(convert_list(tgt[:tgt.index(config.eos_id)], id_2_label, config.pad, config.unk))
 
-def refine_outputs(outputs):
-    ret = []
-    for output in outputs:
-        output[-1] = config.eos_id
-        ret.append(output[:output.index(config.eos_id)])
+    assert len(src_inputs) == len(tgt_outputs)
 
-    return ret
+    with open(output_file, 'w', encoding='utf-8') as fout:
+        for src, tgt, alignment in zip(src_inputs, tgt_outputs, alignment_history):
+            for i, (word, index) in enumerate(zip(tgt, alignment)):
+                if word == config.unk:
+                    tgt[i] = src[index]
+            print(json.dumps({'description': ' '.join(tgt)}, ensure_ascii=False), file=fout)
 
 
 def run_test(sess, model, test_data, verbose=True):
-    outputs = []
+    predicted_ids = []
+    alignment_history = []
     batch_iter = make_batch_iter(list(zip(*test_data)), config.batch_size, shuffle=False, verbose=verbose)
     for step, batch in enumerate(batch_iter):
         value_seq, attr_seq, pos_fw_seq, pos_bw_seq, _ = list(zip(*batch))
@@ -69,8 +87,8 @@ def run_test(sess, model, test_data, verbose=True):
         pos_fw_seq = np.array(pad_batch(pos_fw_seq, config.pad_id))
         pos_bw_seq = np.array(pad_batch(pos_bw_seq, config.pad_id))
 
-        predicted_ids = sess.run(
-            model.predicted_ids,
+        _predicted_ids, _alignment_history = sess.run(
+            [model.predicted_ids, model.alignment_history],
             feed_dict={
                 model.value_inp: value_seq,
                 model.attr_inp: attr_seq,
@@ -80,18 +98,20 @@ def run_test(sess, model, test_data, verbose=True):
                 model.training: False
             }
         )
-        outputs.extend(refine_outputs(predicted_ids.tolist()))
+        predicted_ids.extend(_predicted_ids.tolist())
+        alignment_history.extend(np.argmax(_alignment_history, axis=-1).tolist())
 
         if verbose:
             print('\rprocessing batch: {:>6d}'.format(step + 1), end='')
     print()
 
-    return outputs
+    return predicted_ids, alignment_history
 
 
 def run_evaluate(sess, model, valid_data, valid_summary_writer=None, verbose=True):
     steps = 0
-    outputs = []
+    predicted_ids = []
+    alignment_history = []
     total_loss = 0.0
     total_accu = 0.0
     batch_iter = make_batch_iter(list(zip(*valid_data)), config.batch_size, shuffle=False, verbose=verbose)
@@ -106,8 +126,8 @@ def run_evaluate(sess, model, valid_data, valid_summary_writer=None, verbose=Tru
         pos_bw_seq = np.array(pad_batch(pos_bw_seq, config.pad_id))
         desc_seq = np.array(pad_batch(desc_seq, config.pad_id))
 
-        predicted_ids, loss, accu, global_step, summary = sess.run(
-            [model.predicted_ids, model.loss, model.accu, model.global_step, model.summary],
+        _predicted_ids, _alignment_history, loss, accu, global_step, summary = sess.run(
+            [model.predicted_ids, model.alignment_history, model.loss, model.accu, model.global_step, model.summary],
             feed_dict={
                 model.value_inp: value_seq,
                 model.attr_inp: attr_seq,
@@ -120,7 +140,8 @@ def run_evaluate(sess, model, valid_data, valid_summary_writer=None, verbose=Tru
                 model.training: False
             }
         )
-        outputs.extend(refine_outputs(predicted_ids.tolist()))
+        predicted_ids.extend(_predicted_ids.tolist())
+        alignment_history.extend(np.argmax(_alignment_history, axis=-1).tolist())
 
         steps += 1
         total_loss += loss
@@ -131,7 +152,7 @@ def run_evaluate(sess, model, valid_data, valid_summary_writer=None, verbose=Tru
             valid_summary_writer.add_summary(summary, global_step)
     print()
 
-    return outputs, total_loss / steps, total_accu / steps
+    return predicted_ids, alignment_history, total_loss / steps, total_accu / steps
 
 
 def run_train(sess, model, train_data, valid_data, saver, evaluator,
@@ -184,11 +205,14 @@ def run_train(sess, model, train_data, valid_data, saver, evaluator,
                 saver.save(sess, config.model_file, global_step=global_step)
                 # evaluate saved models after pre-train epochs
                 if i + 1 > args.pre_train_epochs:
-                    outputs, valid_loss, valid_accu = run_evaluate(sess, model, valid_data, valid_summary_writer, verbose=False)
+                    predicted_ids, alignment_history, valid_loss, valid_accu = run_evaluate(
+                        sess, model, valid_data, valid_summary_writer, verbose=False
+                    )
                     print_title('Valid Result', sep='*')
                     print('average valid loss: {:>.4f}, average valid accuracy: {:>.4f}'.format(valid_loss, valid_accu))
+
                     print_title('Saving Result')
-                    save_result(outputs, config.valid_result, config.id_2_word)
+                    save_result(predicted_ids, alignment_history, config.id_2_word, config.valid_data_small, config.valid_result)
                     eval_results = evaluator.evaluate(config.valid_data_small, config.valid_result, config.to_lower)
 
                     # early stop
@@ -217,7 +241,8 @@ def main():
     print('preparing data...')
     config.word_2_id, config.id_2_word = read_dict(config.word_dict)
     config.attr_2_id, config.id_2_attr = read_dict(config.attr_dict)
-    config.word_size = len(config.word_2_id)
+    config.vocab_size = min(config.vocab_size, len(config.word_2_id))
+    config.oov_vocab_size = len(config.word_2_id) - config.vocab_size
     config.attr_size = len(config.attr_2_id)
 
     embedding_matrix = None
@@ -280,10 +305,11 @@ def main():
                 print('loading model from {}...'.format(model_file))
                 saver.restore(sess, model_file)
 
-                outputs, valid_loss, valid_accu = run_evaluate(sess, model, valid_data, verbose=True)
+                predicted_ids, alignment_history, valid_loss, valid_accu = run_evaluate(sess, model, valid_data, verbose=True)
                 print('average valid loss: {:>.4f}, average valid accuracy: {:>.4f}'.format(valid_loss, valid_accu))
+
                 print_title('Saving Result')
-                save_result(outputs, config.valid_result, config.id_2_word)
+                save_result(predicted_ids, alignment_history, config.id_2_word, config.valid_data, config.valid_result)
                 evaluator.evaluate(config.valid_data, config.valid_result, config.to_lower)
             else:
                 print('model not found!')
@@ -300,10 +326,10 @@ def main():
                 print('loading model from {}...'.format(model_file))
                 saver.restore(sess, model_file)
 
-                outputs = run_test(sess, model, test_data, verbose=True)
+                predicted_ids, alignment_history = run_test(sess, model, test_data, verbose=True)
 
                 print_title('Saving Result')
-                save_result(outputs, config.test_result, config.id_2_word)
+                save_result(predicted_ids, alignment_history, config.id_2_word, config.test_data, config.test_result)
                 evaluator.evaluate(config.test_data, config.test_result, config.to_lower)
             else:
                 print('model not found!')

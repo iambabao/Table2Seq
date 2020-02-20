@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+
+"""
+@Author     : Bao
+@Date       : 2020/2/20 21:39
+@Desc       :
+"""
+
 import collections
 
 import tensorflow as tf
@@ -7,7 +15,8 @@ from tensorflow.contrib.framework.python.framework import tensor_util
 
 class ForceAttentionWrapperState(collections.namedtuple('ForceAttentionWrapperState',
                                                         ('cell_state', 'time',
-                                                         'word_coverage', 'attr_coverage'))):
+                                                         'word_coverage', 'attr_coverage',
+                                                         'alignment_history'))):
     def clone(self, **kwargs):
         def with_same_shape(old, new):
             """Check and set new tensor's shape."""
@@ -31,6 +40,7 @@ class ForceAttentionWrapper(tf.nn.rnn_cell.RNNCell):
                  attr_size,
                  memory_sequence_length=None,
                  initial_cell_state=None,
+                 alignment_history=False,
                  name=None):
         super(ForceAttentionWrapper, self).__init__(name=name)
         self._cell = cell
@@ -42,6 +52,7 @@ class ForceAttentionWrapper(tf.nn.rnn_cell.RNNCell):
         self._initial_cell_state = initial_cell_state
         self._memory_state_size = self._memory.shape[-1].value
         self._max_memory_sequence_length = tf.reduce_max(self._memory_sequence_length)
+        self._alignment_history = alignment_history
 
         self._memory_layer = tf.layers.Dense(self._attention_size, use_bias=False, name='memory_layer')
         self._query_layer = tf.layers.Dense(self._attention_size, use_bias=False, name='query_layer')
@@ -60,6 +71,7 @@ class ForceAttentionWrapper(tf.nn.rnn_cell.RNNCell):
         prev_time = state.time
         prev_word_coverage = state.word_coverage
         prev_attr_coverage = state.attr_coverage
+        prev_alignment_history = state.alignment_history
 
         _, cell_state = self._cell(inputs, prev_cell_state, scope)
 
@@ -79,10 +91,15 @@ class ForceAttentionWrapper(tf.nn.rnn_cell.RNNCell):
         c = tf.reduce_sum(self._memory * tf.expand_dims(word_attention, axis=-1), axis=1)
         v = tf.reduce_sum(self._memory * tf.expand_dims(zeta, axis=-1), axis=1)
         c_tilde = self._pi * c + (1 - self._pi) * v  # [batch_size, hidden_size]
-
         outputs = tf.concat([cell_state.h, c_tilde], axis=-1)
+
+        if self._alignment_history:
+            alignment_history = prev_alignment_history.write(prev_time, word_attention)
+        else:
+            alignment_history = prev_alignment_history
         state = ForceAttentionWrapperState(cell_state=cell_state, time=prev_time + 1,
-                                           word_coverage=word_coverage, attr_coverage=attr_coverage)
+                                           word_coverage=word_coverage, attr_coverage=attr_coverage,
+                                           alignment_history=alignment_history)
         return outputs, state
 
     def _get_word_attention(self, memory, query):
@@ -122,7 +139,8 @@ class ForceAttentionWrapper(tf.nn.rnn_cell.RNNCell):
             cell_state=self._cell.state_size,
             time=tf.TensorShape([]),
             word_coverage=self._max_memory_sequence_length,
-            attr_coverage=self._attr_size
+            attr_coverage=self._attr_size,
+            alignment_history=()
         )
 
     @property
@@ -139,5 +157,7 @@ class ForceAttentionWrapper(tf.nn.rnn_cell.RNNCell):
             time = tf.zeros([], tf.int32)
             word_coverage = tf.zeros([batch_size, self._max_memory_sequence_length], tf.float32)
             attr_coverage = tf.zeros([batch_size, self._attr_size], tf.float32)
+            alignment_history = tf.TensorArray(tf.float32, size=0, dynamic_size=True) if self._alignment_history else ()
             return ForceAttentionWrapperState(cell_state=cell_state, time=time,
-                                              word_coverage=word_coverage, attr_coverage=attr_coverage)
+                                              word_coverage=word_coverage, attr_coverage=attr_coverage,
+                                              alignment_history=alignment_history)

@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+
+"""
+@Author     : Bao
+@Date       : 2020/2/20 21:39
+@Desc       :
+"""
+
 import os
 
 
@@ -6,8 +14,7 @@ class Config:
                  sequence_len=150, hidden_size=600, top_k=5,
                  word_em_size=500, attr_em_size=50, pos_em_size=10,
                  fc_size_s=128, fc_size_m=512, fc_size_l=1024,
-                 optimizer='Adam', lr=1e-3, dropout=0.1,
-                 embedding_trainable=False, beam_search=False):
+                 optimizer='Adam', lr=1e-3, dropout=0.1):
         self.root_dir = root_dir
 
         self.temp_dir = os.path.join(self.root_dir, 'temp')
@@ -16,6 +23,7 @@ class Config:
         self.train_data = os.path.join(self.data_dir, 'train_1480.json')
         self.valid_data = os.path.join(self.data_dir, 'valid_1480.json')
         self.test_data = os.path.join(self.data_dir, 'test_1480.json')
+        # self.test_data = os.path.join(self.data_dir, 'valid_1480_small.json')
         self.valid_data_small = os.path.join(self.data_dir, 'valid_1480_small.json')
         self.word_dict = os.path.join(self.data_dir, 'dict_word.json')
         self.attr_dict = os.path.join(self.data_dir, 'dict_attr.json')
@@ -43,8 +51,7 @@ class Config:
         self.num_id = 4
         self.time = '<time>'
         self.time_id = 5
-        self.vocab_size = 20000 + 6
-        self.attr_size = 1480 + 6
+        self.vocab_size = 20000
         self.pos_size = 10
         self.to_lower = True
 
@@ -53,7 +60,6 @@ class Config:
         self.attr_em_size = attr_em_size
         self.pos_em_size = pos_em_size
         self.sequence_len = sequence_len
-        self.beam_search = beam_search
 
         # RNN
         self.hidden_size = hidden_size
@@ -69,4 +75,3 @@ class Config:
         self.lr = lr
         self.dropout = dropout
         self.optimizer = optimizer
-        self.embedding_trainable = embedding_trainable
